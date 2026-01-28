@@ -159,66 +159,6 @@ static void draw_player_goal(SDL_Renderer* r, int px, int py) {
   SDL_RenderFillRect(r, &p);
 }
 
-// Write the player's current maze cell to a JSON file.
-// Overwrites the file with the latest coordinates each time you call it.
-// (Writes to a temporary file then renames for a safer update.)
-static void write_player_pos_json(const char* path, int cell_x, int cell_y) {
-  if (!path || !*path) return;
-
-  char tmp_path[512];
-  // Make a "<path>.tmp" file in the same directory so rename() is more likely to be atomic.
-  snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
-  FILE* f = fopen(tmp_path, "w");
-  if (!f) {
-    fprintf(stderr, "Could not write JSON file: %s\n", tmp_path);
-    return;
-  }
-
-  // Helpful extras: pixel-space position and a timestamp.
-  int pixel_x = PAD + cell_x * CELL;
-  int pixel_y = PAD + cell_y * CELL;
-  uint32_t t_ms = SDL_GetTicks();
-
-  fprintf(
-    f,
-    "{\n"
-    "  \"cell\": {\"x\": %d, \"y\": %d},\n"
-    "  \"pixel\": {\"x\": %d, \"y\": %d},\n"
-    "  \"timestamp_ms\": %u\n"
-    "}\n",
-    cell_x, cell_y,
-    pixel_x, pixel_y,
-    (unsigned)t_ms
-  );
-
-  fflush(f);
-  fclose(f);
-
-  // Replace the real file with the temp file.
-  // If rename fails (e.g., permissions), fall back to writing directly.
-  if (rename(tmp_path, path) != 0) {
-    FILE* out = fopen(path, "w");
-    if (out) {
-      fprintf(
-        out,
-        "{\n"
-        "  \"cell\": {\"x\": %d, \"y\": %d},\n"
-        "  \"pixel\": {\"x\": %d, \"y\": %d},\n"
-        "  \"timestamp_ms\": %u\n"
-        "}\n",
-        cell_x, cell_y,
-        pixel_x, pixel_y,
-        (unsigned)t_ms
-      );
-      fclose(out);
-    } else {
-      fprintf(stderr, "Could not replace JSON file: %s\n", path);
-    }
-    remove(tmp_path);
-  }
-}
-
 // Attempt to move player; returns true if moved
 static bool try_move(int* px, int* py, int dx, int dy) {
   int x = *px, y = *py;
@@ -238,109 +178,143 @@ static bool try_move(int* px, int* py, int dx, int dy) {
   return true;
 }
 
-static void regenerate(int* px, int* py, SDL_Window* win, const char* json_path) {
+
+// POSTs player movement data to the HTTP server at http://10.0.0.140:8080/move
+// using curl. Sends event_type "player_move" with position, move sequence,
+// goal status, and UTC ISO 8601 timestamp.
+static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool goal_reached) {
+    time_t now = time(NULL);
+    struct tm* utc = gmtime(&now);
+    char timestamp[21];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", utc);
+
+    char json[512];
+    snprintf(json, sizeof(json),
+        "{"
+        "\"event_type\":\"player_move\","
+        "\"input\":{\"device\":\"joystick\",\"move_sequence\":%u},"
+        "\"player\":{\"position\":{\"x\":%d,\"y\":%d}},"
+        "\"goal_reached\":%s,"
+        "\"timestamp\":\"%s\""
+        "}",
+        move_seq,
+        cell_x, cell_y,
+        goal_reached ? "true" : "false",
+        timestamp);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "curl -sS -X POST http://localhost:8080/move "
+        "-H \"Content-Type: application/json\" "
+        "-d '%s'",
+        json);
+
+    int ret = system(cmd);
+    if (ret != 0) {
+        fprintf(stderr, "curl command failed with return code %d\n", ret);
+    }
+}
+
+static void regenerate(int* px, int* py, SDL_Window* win) {
   maze_init();
   maze_generate(0, 0);
   *px = 0; *py = 0;
   SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (R to regenerate)");
-
-  // Emit starting position after regeneration.
-  write_player_pos_json(json_path, *px, *py);
 }
 
 int main(int argc, char** argv) {
-  srand((unsigned)time(NULL));
+    (void)argc;  // unused now
+    (void)argv;  // unused now
 
-  // Optional CLI: pass a custom JSON output path.
-  // Example: ./maze_sdl2 player_pos.json
-  const char* json_path = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : "player_pos.json";
+    srand((unsigned)time(NULL));
 
-  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-    fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-    return 1;
-  }
-
-  int win_w = PAD * 2 + MAZE_W * CELL;
-  int win_h = PAD * 2 + MAZE_H * CELL;
-
-  SDL_Window* win = SDL_CreateWindow(
-    "SDL2 Maze - Reach the green goal (R to regenerate)",
-    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-    win_w, win_h,
-    SDL_WINDOW_SHOWN
-  );
-  if (!win) {
-    fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
-    SDL_Quit();
-    return 1;
-  }
-
-  SDL_Renderer* r = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-  if (!r) {
-    fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
-    SDL_DestroyWindow(win);
-    SDL_Quit();
-    return 1;
-  }
-
-  int px = 0, py = 0;
-  regenerate(&px, &py, win, json_path);
-
-  bool running = true;
-  bool won = false;
-
-  while (running) {
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_QUIT) running = false;
-
-      if (e.type == SDL_KEYDOWN) {
-        SDL_Keycode k = e.key.keysym.sym;
-
-        if (k == SDLK_ESCAPE) running = false;
-
-        if (k == SDLK_r) {
-          regenerate(&px, &py, win, json_path);
-          won = false;
-        }
-
-        if (!won) {
-          bool moved = false;
-
-          if (k == SDLK_UP || k == SDLK_w) {
-            moved = try_move(&px, &py, 0, -1);
-          } else if (k == SDLK_RIGHT || k == SDLK_d) {
-            moved = try_move(&px, &py, 1, 0);
-          } else if (k == SDLK_DOWN || k == SDLK_s) {
-            moved = try_move(&px, &py, 0, 1);
-          } else if (k == SDLK_LEFT || k == SDLK_a) {
-            moved = try_move(&px, &py, -1, 0);
-          }
-
-          // Update JSON only when the player's cell actually changes.
-          if (moved) {
-            write_player_pos_json(json_path, px, py);
-          }
-
-          if (px == MAZE_W - 1 && py == MAZE_H - 1) {
-            won = true;
-            SDL_SetWindowTitle(win, "You win! Press R to regenerate, Esc to quit");
-
-            // Optional: also write final (winning) position.
-            write_player_pos_json(json_path, px, py);
-          }
-        }
-      }
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
+        return 1;
     }
 
-    draw_maze(r);
-    draw_player_goal(r, px, py);
+    int win_w = PAD * 2 + MAZE_W * CELL;
+    int win_h = PAD * 2 + MAZE_H * CELL;
 
-    SDL_RenderPresent(r);
-  }
+    SDL_Window* win = SDL_CreateWindow(
+        "SDL2 Maze - Reach the green goal (R to regenerate)",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        win_w, win_h,
+        SDL_WINDOW_SHOWN
+    );
+    if (!win) {
+        fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
+        SDL_Quit();
+        return 1;
+    }
 
-  SDL_DestroyRenderer(r);
-  SDL_DestroyWindow(win);
-  SDL_Quit();
-  return 0;
+    SDL_Renderer* r = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!r) {
+        fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
+
+    int px = 0, py = 0;
+    regenerate(&px, &py, win);
+
+    bool running = true;
+    bool won = false;
+    uint32_t move_sequence = 0;
+
+    while (running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) running = false;
+
+            if (e.type == SDL_KEYDOWN) {
+                SDL_Keycode k = e.key.keysym.sym;
+
+                if (k == SDLK_ESCAPE) running = false;
+
+                if (k == SDLK_r) {
+                    regenerate(&px, &py, win);
+                    won = false;
+                    move_sequence = 0;
+                }
+
+                if (!won) {
+                    bool moved = false;
+
+                    if (k == SDLK_UP || k == SDLK_w) {
+                        moved = try_move(&px, &py, 0, -1);
+                    } else if (k == SDLK_RIGHT || k == SDLK_d) {
+                        moved = try_move(&px, &py, 1, 0);
+                    } else if (k == SDLK_DOWN || k == SDLK_s) {
+                        moved = try_move(&px, &py, 0, 1);
+                    } else if (k == SDLK_LEFT || k == SDLK_a) {
+                        moved = try_move(&px, &py, -1, 0);
+                    }
+
+                    if (moved) {
+                        move_sequence++;
+                        bool goal_reached = (px == MAZE_W - 1 && py == MAZE_H - 1);
+
+                        // Send to HTTP server instead of writing file
+                        send_move_via_curl(move_sequence, px, py, goal_reached);
+
+                        if (goal_reached) {
+                            won = true;
+                            SDL_SetWindowTitle(win, "You win! Press R to regenerate, Esc to quit");
+                        }
+                    }
+                }
+            }
+        }
+
+        draw_maze(r);
+        draw_player_goal(r, px, py);
+        SDL_RenderPresent(r);
+    }
+
+    SDL_DestroyRenderer(r);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+    return 0;
 }
