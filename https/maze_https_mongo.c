@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <microhttpd.h>
 #include <mongoc/mongoc.h>
 #include <bson/bson.h>
@@ -18,6 +19,21 @@ struct connection_info {
     char *data;
     size_t size;
 };
+
+static char *read_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc(n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    if (fread(buf, 1, n, f) != (size_t)n) { fclose(f); free(buf); return NULL; }
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
 
 static void get_utc_iso8601(char *buf, size_t len) {
     time_t now = time(NULL);
@@ -109,15 +125,23 @@ int main(void) {
 
     mongoc_init();
 
+	char *cert_pem = read_file(cert_file);
+	char *key_pem  = read_file(key_file);
+	if (!cert_pem || !key_pem) {
+    	fprintf(stderr, "Failed to read cert/key files\n");
+    	return 1;
+	}
+
+
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
         DEFAULT_PORT,
         NULL, NULL,
         &handle_post, NULL,
         MHD_OPTION_HTTPS_MEM_CERT,
-        cert_file,
+        cert_pem,
         MHD_OPTION_HTTPS_MEM_KEY,
-        key_file,
+        key_pem,
         MHD_OPTION_END);
 
     if (!daemon) {
@@ -129,6 +153,8 @@ int main(void) {
     getchar();
 
     MHD_stop_daemon(daemon);
+	free(cert_pem);
+	free(key_pem);
     mongoc_cleanup();
     return 0;
 }
