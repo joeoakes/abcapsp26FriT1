@@ -204,7 +204,7 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-        "curl -sS -X POST http://localhost:8080/move "
+        "curl -k -X POST https://localhost:8443/move "
         "-H \"Content-Type: application/json\" "
         "-d '%s'",
         json);
