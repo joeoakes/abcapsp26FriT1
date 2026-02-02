@@ -13,6 +13,12 @@ This project implements a **secure, autonomous swarm of Mini-Pupper quadruped ro
 
 Robots operate locally with real-time autonomy while securely logging mission telemetry to a centralized system. A high-performance AI station performs **operator reasoning, diagnostics, and shared swarm intelligence** using vector databases.
 
+## 🧩 System Architecture Overview
+
+![Mini-Pupper Secure Swarm Architecture](Entities.png)
+
+**Figure:** Secure Mini-Pupper swarm architecture showing robot control, telemetry flow, logging infrastructure, AI RAG server, and secure remote access.
+
 ---
 
 ## 🎯 Objectives
