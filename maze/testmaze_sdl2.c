@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define MAZE_W 21   // number of cells horizontally
 #define MAZE_H 15   // number of cells vertically
@@ -215,10 +217,122 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
     }
 }
 
+typedef struct {
+    char mission_id[64];
+    time_t start_time;
+
+    int moves_left_turn;
+    int moves_right_turn;
+    int moves_straight;
+    int moves_reverse;
+    int moves_total;
+
+    float distance_traveled;
+    bool finished;
+} MissionState;
+
+typedef enum {
+    STATE_MAZE,
+    STATE_SUMMARY
+} AppState;
+
+static AppState app_state = STATE_MAZE;
+static MissionState mission;
+
+
+static void generate_mission_id(char* out, size_t n) {
+    snprintf(out, n, "%08x-%04x-%04x-%04x-%08x",
+        rand(), rand() & 0xffff, rand() & 0xffff,
+        rand() & 0xffff, rand());
+}
+
+static void save_mission_to_redis() {
+    time_t end = time(NULL);
+
+    char start_buf[32], end_buf[32];
+    strftime(start_buf, sizeof(start_buf), "%Y-%m-%dT%H:%M:%SZ", gmtime(&mission.start_time));
+    strftime(end_buf, sizeof(end_buf), "%Y-%m-%dT%H:%M:%SZ", gmtime(&end));
+
+    int duration = (int)difftime(end, mission.start_time);
+
+    const char* result = mission.finished ? "success" : "aborted";
+    const char* abort_reason = mission.finished ? "none" : "user_terminated";
+
+    char key[256];
+    snprintf(key, sizeof(key), "mission:%s:summary", mission.mission_id);
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "redis-cli HSET %s "
+        "robot_id maze_sim "
+        "mission_type maze_navigation "
+        "start_time '%s' "
+        "end_time '%s' "
+        "moves_left_turn %d "
+        "moves_right_turn %d "
+        "moves_straight %d "
+        "moves_reverse %d "
+        "moves_total %d "
+        "distance_traveled %.2f "
+        "duration_seconds %d "
+        "mission_result %s "
+        "abort_reason %s",
+        key,
+        start_buf,
+        end_buf,
+        mission.moves_left_turn,
+        mission.moves_right_turn,
+        mission.moves_straight,
+        mission.moves_reverse,
+        mission.moves_total,
+        mission.distance_traveled,
+        duration,
+        result,
+        abort_reason
+    );
+
+    system(cmd);
+}
+
+static void launch_mission_dashboard(const char *mission_id) {
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork failed for mission_dashboard");
+        return;
+    }
+
+    if (pid == 0) {
+        close(STDIN_FILENO);
+
+        execl("./missions/mission_dashboard",
+              "mission_dashboard",
+              mission_id,
+              "127.0.0.1",
+              "6379",
+              (char *) NULL);
+
+        perror("execl ./missions/mission_dashboard failed");
+        _exit(1);
+    }
+    printf("Mission report launched in background (mission %s)\n", mission_id);
+}
+
 static void regenerate(int* px, int* py, SDL_Window* win) {
   maze_init();
   maze_generate(0, 0);
   *px = 0; *py = 0;
+
+  generate_mission_id(mission.mission_id, sizeof(mission.mission_id));
+  mission.start_time = time(NULL);
+
+  mission.moves_left_turn = 0;
+  mission.moves_right_turn = 0;
+  mission.moves_straight = 0;
+  mission.moves_reverse = 0;
+  mission.moves_total = 0;
+  mission.distance_traveled = 0.0f;
+  mission.finished = false;
+
   SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (R to regenerate)");
 }
 
@@ -273,6 +387,17 @@ int main(int argc, char** argv) {
 
                 if (k == SDLK_ESCAPE) running = false;
 
+                if (k == SDLK_l) {
+                    mission.finished = won;
+                    save_mission_to_redis();
+                    SDL_SetWindowTitle(win, "Mission report launched in terminal...");
+                    launch_mission_dashboard(mission.mission_id);
+
+                    regenerate(&px, &py, win);
+                    won = false;
+                    move_sequence = 0;
+                }
+
                 if (k == SDLK_r) {
                     regenerate(&px, &py, win);
                     won = false;
@@ -294,6 +419,19 @@ int main(int argc, char** argv) {
 
                     if (moved) {
                         move_sequence++;
+                        mission.moves_total++;
+                        mission.distance_traveled += 1.0f;
+
+                        // classify movement
+                        if (k == SDLK_LEFT || k == SDLK_a)
+                            mission.moves_left_turn++;
+                        else if (k == SDLK_RIGHT || k == SDLK_d)
+                            mission.moves_right_turn++;
+                        else if (k == SDLK_UP || k == SDLK_w)
+                            mission.moves_straight++;
+                        else if (k == SDLK_DOWN || k == SDLK_s)
+                            mission.moves_reverse++;
+
                         bool goal_reached = (px == MAZE_W - 1 && py == MAZE_H - 1);
 
                         // Send to HTTP server instead of writing file
@@ -301,6 +439,7 @@ int main(int argc, char** argv) {
 
                         if (goal_reached) {
                             won = true;
+                            mission.finished = true;
                             SDL_SetWindowTitle(win, "You win! Press R to regenerate, Esc to quit");
                         }
                     }
