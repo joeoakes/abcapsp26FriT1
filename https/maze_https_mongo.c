@@ -7,7 +7,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DEFAULT_PORT 8443
+#define DEFAULT_PORT 8447
 #define POSTBUFFERSIZE  4096
 #define MAXNAMESIZE     64
 #define MAXANSWERSIZE   512
