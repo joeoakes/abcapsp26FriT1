@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
   redisContext* c = redisConnectWithTimeout(host, port, tv);
   if (!c || c->err) {
     fprintf(stderr, "ERROR: Redis connection failed to %s:%d\n", host, port);
-    if (c && c->errstr) fprintf(stderr, "  %s\n", c->errstr);
+    if (c && c->errstr[0] != '\0') fprintf(stderr, "  %s\n", c->errstr);
     if (c) redisFree(c);
 
     printf("\nNOTE: If Redis isn't running, start it:\n");

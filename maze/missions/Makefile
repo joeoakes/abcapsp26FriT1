@@ -15,7 +15,9 @@ ifeq ($(NO_REDIS),1)
   CFLAGS += -DNO_REDIS
   LDLIBS :=
 else
-  LDLIBS := -lhiredis
+  HIREDIS_PREFIX := $(shell brew --prefix hiredis)
+  CFLAGS += -I$(HIREDIS_PREFIX)/include
+  LDLIBS := -L$(HIREDIS_PREFIX)/lib -lhiredis
 endif
 
 all: $(TARGET)

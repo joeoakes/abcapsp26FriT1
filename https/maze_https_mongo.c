@@ -55,7 +55,7 @@ struct app_config {
 
 static struct app_config config;
 
-static int handle_post(void *cls,
+static enum MHD_Result handle_post(void *cls,
                        struct MHD_Connection *connection,
                        const char *url,
                        const char *method,
