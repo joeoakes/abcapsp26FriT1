@@ -204,11 +204,15 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
         goal_reached ? "true" : "false",
         timestamp);
 
+    const char *endpoint = getenv("MOVE_ENDPOINT");
+    if (!endpoint || !*endpoint) endpoint = "https://10.170.8.101:8447/move";
+
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-        "curl -k -X POST https://localhost:8447/move "
+        "curl -k -sS -X POST \"%s\" "
         "-H \"Content-Type: application/json\" "
         "-d '%s'",
+        endpoint,
         json);
 
     int ret = system(cmd);
