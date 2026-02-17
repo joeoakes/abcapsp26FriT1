@@ -6,18 +6,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <hiredis/hiredis.h>
 
 #define DEFAULT_PORT 8447
 #define POSTBUFFERSIZE  4096
 #define MAXNAMESIZE     64
 #define MAXANSWERSIZE   512
+#define DEFAULT_REDIS_HOST "10.170.8.109"
+#define DEFAULT_REDIS_PORT 6379
 #define DEFAULT_MONGO_URI "mongodb://localhost:27017"
-#define DEFAULT_MONGO_DB  "team1maze"
-#define DEFAULT_MONGO_COL "moves"
+#define DEFAULT_MONGO_DB  "maze"
+#define DEFAULT_MONGO_COL "team1fmoves"
 
 static const char *cert_file = "certs/server.crt";
 static const char *key_file  = "certs/server.key";
 static mongoc_client_t *mongo_client;
+
+static redisContext *redis_ctx;
+
 
 struct connection_info {
     char *data;
@@ -50,6 +56,9 @@ struct app_config {
     const char *mongo_uri;
     const char *mongo_db;
     const char *mongo_col;
+
+    const char *redis_host;
+    int redis_port;
 };
 
 static struct app_config config;
@@ -107,6 +116,19 @@ static int handle_post(void *cls,
     mongoc_collection_destroy(col);
     bson_destroy(doc);
 
+    if (redis_ctx) {
+        redisReply *r = redisCommand(redis_ctx, "RPUSH moves:raw %s", ci->data);
+        if (!r) {
+            fprintf(stderr, "Redis command failed (RPUSH)\n");
+        } else {
+            freeReplyObject(r);
+        }
+
+        redisReply *r2 = redisCommand(redis_ctx, "SET moves:last_received_at %s", ts);
+        if (r2) freeReplyObject(r2);
+    }
+
+
     const char *response = "{\"status\":\"ok\"}";
     struct MHD_Response *resp =
         MHD_create_response_from_buffer(strlen(response),
@@ -136,6 +158,13 @@ int main(void) {
     if (!config.mongo_col || !*config.mongo_col)
         config.mongo_col = DEFAULT_MONGO_COL;
 
+    config.redis_host = getenv("REDIS_HOST");
+    if (!config.redis_host || !*config.redis_host)
+        config.redis_host = DEFAULT_REDIS_HOST;
+
+    const char *rp = getenv("REDIS_PORT");
+    config.redis_port = (rp && *rp) ? atoi(rp) : DEFAULT_REDIS_PORT;
+
 
     mongoc_init();
     mongo_client = mongoc_client_new(config.mongo_uri);
@@ -144,13 +173,39 @@ int main(void) {
         return 1;
     }
 
+    struct timeval tv;
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+
+    redis_ctx = redisConnectWithTimeout(config.redis_host, config.redis_port, tv);
+    if (!redis_ctx || redis_ctx->err) {
+        fprintf(stderr, "Redis connect failed to %s:%d\n", config.redis_host, config.redis_port);
+        if (redis_ctx && redis_ctx->errstr) fprintf(stderr, "  %s\n", redis_ctx->errstr);
+        if (redis_ctx) redisFree(redis_ctx);
+        redis_ctx = NULL; // allow server to still run if you want
+        // If you want to hard-fail instead, return 1 here.
+    }
+
+    if (redis_ctx && config.redis_pass && *config.redis_pass) {
+        redisReply *auth = redisCommand(redis_ctx, "AUTH %s", config.redis_pass);
+        if (!auth || auth->type == REDIS_REPLY_ERROR) {
+            fprintf(stderr, "Redis AUTH failed\n");
+            if (auth && auth->str) fprintf(stderr, "  %s\n", auth->str);
+            if (auth) freeReplyObject(auth);
+            redisFree(redis_ctx);
+            redis_ctx = NULL;
+            // If you want to hard-fail instead, return 1 here.
+        } else {
+            freeReplyObject(auth);
+        }
+    }
+
 	char *cert_pem = read_file(cert_file);
 	char *key_pem  = read_file(key_file);
 	if (!cert_pem || !key_pem) {
     	fprintf(stderr, "Failed to read cert/key files\n");
     	return 1;
 	}
-
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
