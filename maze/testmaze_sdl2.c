@@ -1,6 +1,8 @@
 // maze_sdl2.c
 // Simple SDL2 maze: generate (DFS backtracker), draw, move player to goal.
 // Controls: Arrow keys or WASD. R = regenerate. Esc = quit.
+// Compile using: gcc testmaze_sdl2.c -o testmaze_sdl2 `sdl2-config --cflags --libs`
+// Run using: ./testmaze_sdl2
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
@@ -250,7 +252,8 @@ static void generate_mission_id(char* out, size_t n) {
         rand() & 0xffff, rand());
 }
 
-static void save_mission_to_redis() {
+static void save_mission_via_curl()
+{
     time_t end = time(NULL);
 
     char start_buf[32], end_buf[32];
@@ -262,40 +265,53 @@ static void save_mission_to_redis() {
     const char* result = mission.finished ? "success" : "aborted";
     const char* abort_reason = mission.finished ? "none" : "user_terminated";
 
-    char key[256];
-    snprintf(key, sizeof(key), "mission:%s:summary", mission.mission_id);
+    /* Build JSON (escaped properly for shell) */
+    char json[2048];
+    snprintf(json, sizeof(json),
+             "{"
+             "\"mission_id\":\"%s\","
+             "\"robot_id\":\"maze_sim\","
+             "\"mission_type\":\"maze_navigation\","
+             "\"start_time\":\"%s\","
+             "\"end_time\":\"%s\","
+             "\"moves_left_turn\":%d,"
+             "\"moves_right_turn\":%d,"
+             "\"moves_straight\":%d,"
+             "\"moves_reverse\":%d,"
+             "\"moves_total\":%d,"
+             "\"distance_traveled\":\"%.2f\","
+             "\"duration_seconds\":%d,"
+             "\"mission_result\":\"%s\","
+             "\"abort_reason\":\"%s\""
+             "}",
+             mission.mission_id,
+             start_buf,
+             end_buf,
+             mission.moves_left_turn,
+             mission.moves_right_turn,
+             mission.moves_straight,
+             mission.moves_reverse,
+             mission.moves_total,
+             mission.distance_traveled,
+             duration,
+             result,
+             abort_reason);
 
-    char cmd[2048];
+    const char *endpoint = getenv("MISSION_ENDPOINT");
+    if (!endpoint || !*endpoint) endpoint = "https://10.170.8.109:8447/mission";
+
+    char cmd[4096];
     snprintf(cmd, sizeof(cmd),
-        "redis-cli HSET %s "
-        "robot_id maze_sim "
-        "mission_type maze_navigation "
-        "start_time '%s' "
-        "end_time '%s' "
-        "moves_left_turn %d "
-        "moves_right_turn %d "
-        "moves_straight %d "
-        "moves_reverse %d "
-        "moves_total %d "
-        "distance_traveled %.2f "
-        "duration_seconds %d "
-        "mission_result %s "
-        "abort_reason %s",
-        key,
-        start_buf,
-        end_buf,
-        mission.moves_left_turn,
-        mission.moves_right_turn,
-        mission.moves_straight,
-        mission.moves_reverse,
-        mission.moves_total,
-        mission.distance_traveled,
-        duration,
-        result,
-        abort_reason
-    );
+             "curl -k -sS -X POST \"%s\" "
+             "-H \"Content-Type: application/json\" "
+             "-d '%s'",
+             endpoint,
+             json);
 
-    system(cmd);
+    int ret = system(cmd);
+    if (ret != 0) {
+        fprintf(stderr, "curl mission POST failed with return code %d\n", ret);
+    }
 }
 
 static void launch_mission_dashboard(const char *mission_id) {
@@ -393,7 +409,7 @@ int main(int argc, char** argv) {
 
                 if (k == SDLK_l) {
                     mission.finished = won;
-                    save_mission_to_redis();
+                    save_mission_via_curl();
                     SDL_SetWindowTitle(win, "Mission report launched in terminal...");
                     launch_mission_dashboard(mission.mission_id);
 
