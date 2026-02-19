@@ -1,3 +1,5 @@
+// Compile using: gcc -O2 -Wall -Wextra -std=c11 maze_https_mongo.c -o maze_https_mongo   $(pkg-config --cflags --libs libmicrohttpd libmongoc-1.0 gnutls)
+// Run using: ./maze_https_mongo
 #include <errno.h>
 #include <microhttpd.h>
 #include <mongoc/mongoc.h>
@@ -12,8 +14,7 @@
 #define MAXNAMESIZE     64
 #define MAXANSWERSIZE   512
 #define DEFAULT_MONGO_URI "mongodb://localhost:27017"
-#define DEFAULT_MONGO_DB  "maze"
-#define DEFAULT_MONGO_DB  "team1maze"
+#define DEFAULT_MONGO_DB  "team1fmoves"
 #define DEFAULT_MONGO_COL "moves"
 
 static const char *cert_file = "certs/server.crt";
