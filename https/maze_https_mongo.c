@@ -168,7 +168,7 @@ int main(void) {
         return 1;
     }
 
-    printf("HTTPS server listening on https://localhost:%d/move\n", DEFAULT_PORT);
+    printf("MongoDB HTTPS server listening on https://localhost:%d/move\n", DEFAULT_PORT);
     getchar();
 
     MHD_stop_daemon(daemon);
