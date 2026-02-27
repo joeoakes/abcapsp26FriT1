@@ -2,14 +2,36 @@
 // Simple HTTPS POST server on the robot to receive telemetry JSON from maze simulator
 // Receives same format as the move events: {"event_type":"player_move", ...}
 //
-// Build (example):
-//   gcc maze_https_minipupper.c -o maze_https_minipupper \
-//     -lmicrohttpd -lssl -lcrypto -lcjson \
-//     -lrclc -lrcl -lrcutils
+// Build:
+// source /opt/ros/jazzy/setup.bash
+
+// gcc maze_https_minipupper.c -o maze_https_minipupper \
+//   -I/opt/ros/jazzy/include \
+//   -I/opt/ros/jazzy/include/rcl \
+//   -I/opt/ros/jazzy/include/rclc \
+//   -I/opt/ros/jazzy/include/rcutils \
+//   -I/opt/ros/jazzy/include/rmw \
+//   -I/opt/ros/jazzy/include/rcl_action \
+//   -I/opt/ros/jazzy/include/rcl_yaml_param_parser \
+//   -I/opt/ros/jazzy/include/type_description_interfaces \
+//   -I/opt/ros/jazzy/include/rosidl_runtime_c \
+//   -I/opt/ros/jazzy/include/rosidl_typesupport_interface \
+//   -I/opt/ros/jazzy/include/rosidl_dynamic_typesupport \
+//   -I/opt/ros/jazzy/include/service_msgs \
+//   -I/opt/ros/jazzy/include/builtin_interfaces \
+//   -I/opt/ros/jazzy/include/unique_identifier_msgs \
+//   -I/opt/ros/jazzy/include/action_msgs \
+//   -I/opt/ros/jazzy/include/geometry_msgs \
+//   -L/opt/ros/jazzy/lib \
+//   $(pkg-config --cflags --libs libmicrohttpd gnutls libcjson) \
+//   -lrclc -lrcl -lrcutils -lrmw -lrcl_action \
+//   -lrosidl_typesupport_c \
+//   -lgeometry_msgs__rosidl_generator_c \
+//   -lgeometry_msgs__rosidl_typesupport_c \
+//   -lm
+
 //
-// Run (after sourcing ROS):
-//   source /opt/ros/humble/setup.bash
-//   source ~/ros2_ws/install/setup.bash
+// Run after compiling:
 //   ./maze_https_minipupper
 //
 // Notes:
