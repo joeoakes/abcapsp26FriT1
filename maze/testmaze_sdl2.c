@@ -183,9 +183,29 @@ static bool try_move(int* px, int* py, int dx, int dy) {
 }
 
 
-// POSTs player movement data to the HTTP server at http://10.0.0.140:8080/move
+// POSTs player movement data to the HTTPS server at MOVE_ENDPOINT / MOVE_ENDPOINT_2 (HTTPS)
 // using curl. Sends event_type "player_move" with position, move sequence,
 // goal status, and UTC ISO 8601 timestamp.
+
+static int post_json_via_curl(const char *endpoint, const char *json)
+{
+    if (!endpoint || !*endpoint) return 0;
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "curl -k -sS -X POST \"%s\" "
+        "-H \"Content-Type: application/json\" "
+        "-d '%s'",
+        endpoint,
+        json);
+
+    int ret = system(cmd);
+    if (ret != 0) {
+        fprintf(stderr, "curl POST failed (endpoint=%s) rc=%d\n", endpoint, ret);
+    }
+    return ret;
+}
+
 static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool goal_reached) {
     time_t now = time(NULL);
     struct tm* utc = gmtime(&now);
@@ -206,20 +226,15 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
         goal_reached ? "true" : "false",
         timestamp);
 
-    const char *endpoint = getenv("MOVE_ENDPOINT");
-    if (!endpoint || !*endpoint) endpoint = "https://10.170.8.101:8447/move";
+    const char *ep_robot = getenv("MOVE_ENDPOINT");
+    if (!ep_robot || !*ep_robot) ep_robot = "https://10.170.8.135:8447/move";
 
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "curl -k -sS -X POST \"%s\" "
-        "-H \"Content-Type: application/json\" "
-        "-d '%s'",
-        endpoint,
-        json);
+    const char *ep_log = getenv("MOVE_ENDPOINT_2");
+    if (!ep_log || !*ep_log) ep_log = "https://10.170.8.130:8447/move";
 
-    int ret = system(cmd);
-    if (ret != 0) {
-        fprintf(stderr, "curl command failed with return code %d\n", ret);
+    post_json_via_curl(ep_robot, json);
+    if (strcmp(ep_log, ep_robot) != 0) {
+        post_json_via_curl(ep_log, json);
     }
 }
 
@@ -298,7 +313,7 @@ static void save_mission_via_curl()
              abort_reason);
 
     const char *endpoint = getenv("MISSION_ENDPOINT");
-    if (!endpoint || !*endpoint) endpoint = "https://10.170.8.109:8447/mission";
+    if (!endpoint || !*endpoint) endpoint = "https://10.170.8.130:8447/mission";
 
     char cmd[4096];
     snprintf(cmd, sizeof(cmd),
@@ -315,6 +330,12 @@ static void save_mission_via_curl()
 }
 
 static void launch_mission_dashboard(const char *mission_id) {
+    const char *redis_host = getenv("REDIS_HOST");
+    if (!redis_host || !*redis_host) redis_host = "127.0.0.1";
+
+    const char *redis_port = getenv("REDIS_PORT");
+    if (!redis_port || !*redis_port) redis_port = "6379";
+
     pid_t pid = fork();
     if (pid == -1) {
         perror("fork failed for mission_dashboard");
@@ -327,8 +348,8 @@ static void launch_mission_dashboard(const char *mission_id) {
         execl("./missions/mission_dashboard",
               "mission_dashboard",
               mission_id,
-              "127.0.0.1",
-              "6379",
+              redis_host,
+              redis_port,
               (char *) NULL);
 
         perror("execl ./missions/mission_dashboard failed");
@@ -454,7 +475,7 @@ int main(int argc, char** argv) {
 
                         bool goal_reached = (px == MAZE_W - 1 && py == MAZE_H - 1);
 
-                        // Send to HTTP server instead of writing file
+                        // Send to HTTPS server instead of writing file
                         send_move_via_curl(move_sequence, px, py, goal_reached);
 
                         if (goal_reached) {
