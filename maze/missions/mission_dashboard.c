@@ -142,6 +142,20 @@ int main(int argc, char** argv) {
   char* duration_seconds  = hget(c, key, "duration_seconds");
   char* mission_result    = hget(c, key, "mission_result");
   char* abort_reason      = hget(c, key, "abort_reason");
+  char* camera_status     = hget(c, key, "camera_status");
+  char* apriltag_detected = hget(c, key, "apriltag_detected");
+  char* apriltag_family   = hget(c, key, "apriltag_family");
+  char* apriltag_id       = hget(c, key, "apriltag_id");
+  char* apriltag_x        = hget(c, key, "apriltag_x");
+  char* apriltag_y        = hget(c, key, "apriltag_y");
+  char* apriltag_z        = hget(c, key, "apriltag_z");
+  char* apriltag_roll     = hget(c, key, "apriltag_roll");
+  char* apriltag_pitch    = hget(c, key, "apriltag_pitch");
+  char* apriltag_yaw      = hget(c, key, "apriltag_yaw");
+  char* mtls_status       = hget(c, key, "mtls_status");
+  char* planner_next_move = hget(c, key, "planner_next_move");
+  char* planner_plan_idx  = hget(c, key, "planner_plan_index");
+  char* planner_plan_len  = hget(c, key, "planner_plan_length");
 
   // If the key doesn't exist, Redis will return nil for fields. Give a helpful message.
   if (!robot_id && !mission_type && !start_time && !mission_result) {
@@ -164,6 +178,20 @@ int main(int argc, char** argv) {
   print_kv("duration_seconds", duration_seconds);
   print_kv("mission_result", mission_result);
   print_kv("abort_reason", abort_reason);
+  print_kv("camera_status", camera_status);
+  print_kv("apriltag_detected", apriltag_detected);
+  print_kv("apriltag_family", apriltag_family);
+  print_kv("apriltag_id", apriltag_id);
+  print_kv("apriltag_x", apriltag_x);
+  print_kv("apriltag_y", apriltag_y);
+  print_kv("apriltag_z", apriltag_z);
+  print_kv("apriltag_roll", apriltag_roll);
+  print_kv("apriltag_pitch", apriltag_pitch);
+  print_kv("apriltag_yaw", apriltag_yaw);
+  print_kv("mtls_status", mtls_status);
+  print_kv("planner_next_move", planner_next_move);
+  print_kv("planner_plan_index", planner_plan_idx);
+  print_kv("planner_plan_length", planner_plan_len);
 
   print_footer();
 
@@ -180,6 +208,20 @@ int main(int argc, char** argv) {
   free(duration_seconds);
   free(mission_result);
   free(abort_reason);
+  free(camera_status);
+  free(apriltag_detected);
+  free(apriltag_family);
+  free(apriltag_id);
+  free(apriltag_x);
+  free(apriltag_y);
+  free(apriltag_z);
+  free(apriltag_roll);
+  free(apriltag_pitch);
+  free(apriltag_yaw);
+  free(mtls_status);
+  free(planner_next_move);
+  free(planner_plan_idx);
+  free(planner_plan_len);
 
   redisFree(c);
   return 0;
