@@ -331,6 +331,15 @@ Orientation (deg): Roll=2.1 Pitch=-1.5 Yaw=15.3
 ---
 
 
+\# Update for MiniPupper 3/6/26
+
+In order to get the camera to work I used ssh -YC ubuntu@example so that trusted X11 forwarding is enabled and the traffic is compressed in an attempt to reduce lag
+
+Updated the code to use pyapriltags instead of pupil-apriltags
+
+Lowered resolution and reduced the frame rate that the camera captures to attempt to reduce lag
+
+---
 
 \# Notes
 
