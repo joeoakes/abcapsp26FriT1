@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
+from pyapriltags import Detector
 import math
 
 def rvec_to_rpy_degrees(rvec):
@@ -17,9 +17,9 @@ def main():
     cam_index = 0
 
     # Prefer DirectShow on Windows for better stability:
-    cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap = cv2.VideoCapture(cam_index, cv2.CAP_VL42)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     if not cap.isOpened():
         raise RuntimeError("Could not open camera. Try cam_index=1 or 2.")
@@ -28,8 +28,8 @@ def main():
     # families can be: "tag36h11", "tag25h9", "tag16h5", ...
     detector = Detector(
         families="tag36h11",
-        nthreads=2,
-        quad_decimate=2.0,
+        nthreads=1,
+        quad_decimate=3.0,
         quad_sigma=0.0,
         refine_edges=1,
         decode_sharpening=0.25,
@@ -46,11 +46,17 @@ def main():
     cx = w / 2.0
     cy = h / 2.0
 
+    frame_count = 0
     print("Press ESC to quit.")
+
     while True:
         ok, frame = cap.read()
         if not ok:
             break
+
+        frame_count += 1
+        if frame_count % 2 != 0:
+            continue
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
