@@ -30,21 +30,44 @@ typedef struct {
   bool visited;
 } Cell;
 
-static Cell g[MAZE_H][MAZE_W];
-
 // Position helper for A* and path storage
 typedef struct {
   int x, y;
 } Pos;
 
+typedef struct {
+    char mission_id[64];
+    time_t start_time;
+
+    int moves_left_turn;
+    int moves_right_turn;
+    int moves_straight;
+    int moves_reverse;
+    int moves_total;
+
+    float distance_traveled;
+    bool finished;
+} MissionState;
+
+typedef enum {
+    STATE_MAZE,
+    STATE_SUMMARY
+} AppState;
+
+static Cell g[MAZE_H][MAZE_W];
 static Pos current_path[MAZE_W * MAZE_H];
 static int path_len = 0;
-
-// For local testing
 static bool network_enabled = true;
+static AppState app_state = STATE_MAZE;
+static MissionState mission;
 
 static inline bool in_bounds(int x, int y) {
   return (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H);
+}
+
+// Manhattan distance heuristic (perfect for 4-way grid)
+static int heuristic(int x, int y) {
+  return abs(x - (MAZE_W - 1)) + abs(y - (MAZE_H - 1));
 }
 
 // Remove wall between (x,y) and (nx,ny)
@@ -136,9 +159,23 @@ static bool can_move_to(int x, int y, int nx, int ny) {
   return true;
 }
 
-// Manhattan distance heuristic (perfect for 4-way grid)
-static int heuristic(int x, int y) {
-  return abs(x - (MAZE_W - 1)) + abs(y - (MAZE_H - 1));
+// Attempt to move player; returns true if moved
+static bool try_move(int* px, int* py, int dx, int dy) {
+  int x = *px, y = *py;
+  int nx = x + dx, ny = y + dy;
+  if (!in_bounds(nx, ny)) return false;
+
+  uint8_t w = g[y][x].walls;
+
+  // Blocked by wall?
+  if (dx == 0 && dy == -1 && (w & WALL_N)) return false;
+  if (dx == 1 && dy == 0  && (w & WALL_E)) return false;
+  if (dx == 0 && dy == 1  && (w & WALL_S)) return false;
+  if (dx == -1 && dy == 0 && (w & WALL_W)) return false;
+
+  *px = nx;
+  *py = ny;
+  return true;
 }
 
 // A* pathfinding from (sx,sy) to goal. Fills current_path[0..path_len-1] (start -> goal)
@@ -316,25 +353,6 @@ static void draw_player_goal(SDL_Renderer* r, int px, int py) {
   SDL_RenderFillRect(r, &p);
 }
 
-// Attempt to move player; returns true if moved
-static bool try_move(int* px, int* py, int dx, int dy) {
-  int x = *px, y = *py;
-  int nx = x + dx, ny = y + dy;
-  if (!in_bounds(nx, ny)) return false;
-
-  uint8_t w = g[y][x].walls;
-
-  // Blocked by wall?
-  if (dx == 0 && dy == -1 && (w & WALL_N)) return false;
-  if (dx == 1 && dy == 0  && (w & WALL_E)) return false;
-  if (dx == 0 && dy == 1  && (w & WALL_S)) return false;
-  if (dx == -1 && dy == 0 && (w & WALL_W)) return false;
-
-  *px = nx;
-  *py = ny;
-  return true;
-}
-
 // POSTs player movement data to the HTTPS server at MOVE_ENDPOINT / MOVE_ENDPOINT_2 (HTTPS)
 // using curl. Sends event_type "player_move" with position, move sequence,
 // goal status, and UTC ISO 8601 timestamp.
@@ -390,37 +408,7 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
     }
 }
 
-typedef struct {
-    char mission_id[64];
-    time_t start_time;
-
-    int moves_left_turn;
-    int moves_right_turn;
-    int moves_straight;
-    int moves_reverse;
-    int moves_total;
-
-    float distance_traveled;
-    bool finished;
-} MissionState;
-
-typedef enum {
-    STATE_MAZE,
-    STATE_SUMMARY
-} AppState;
-
-static AppState app_state = STATE_MAZE;
-static MissionState mission;
-
-
-static void generate_mission_id(char* out, size_t n) {
-    snprintf(out, n, "%08x-%04x-%04x-%04x-%08x",
-        rand(), rand() & 0xffff, rand() & 0xffff,
-        rand() & 0xffff, rand());
-}
-
-static void save_mission_via_curl()
-{
+static void save_mission_via_curl() {
     if (!network_enabled) return;
 
     time_t end = time(NULL);
@@ -510,6 +498,12 @@ static void launch_mission_dashboard(const char *mission_id) {
         _exit(1);
     }
     printf("Mission report launched in background (mission %s)\n", mission_id);
+}
+
+static void generate_mission_id(char* out, size_t n) {
+    snprintf(out, n, "%08x-%04x-%04x-%04x-%08x",
+        rand(), rand() & 0xffff, rand() & 0xffff,
+        rand() & 0xffff, rand());
 }
 
 static void regenerate(int* px, int* py, SDL_Window* win) {
