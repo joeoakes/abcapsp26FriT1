@@ -402,10 +402,11 @@ static void send_move_via_curl(uint32_t move_seq, int cell_x, int cell_y, bool g
     const char *ep_log = getenv("MOVE_ENDPOINT_2");
     if (!ep_log || !*ep_log) ep_log = "https://10.170.8.130:8447/move";
 
-    post_json_via_curl(ep_robot, json);
-    if (strcmp(ep_log, ep_robot) != 0) {
-        post_json_via_curl(ep_log, json);
-    }
+    // post_json_via_curl(ep_robot, json);
+    // if (strcmp(ep_log, ep_robot) != 0) {
+    //     post_json_via_curl(ep_log, json);
+    // }
+    post_json_via_curl(ep_log, json);
 }
 
 static void save_mission_via_curl() {
