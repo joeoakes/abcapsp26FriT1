@@ -1,9 +1,21 @@
+/*
+Compile:
+gcc -Wall -Wextra -O2 -std=c11 maze_https_minipupper.c -o maze_https_minipupper \
+  $(pkg-config --cflags --libs libmicrohttpd libcjson)
+
+Run from the directory that contains:
+  certs/server.crt
+  certs/server.key
+*/
+
 #include <microhttpd.h>
+#include <cjson/cJSON.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <cjson/cJSON.h>
+#include <sys/wait.h>
 
 #define PORT 8447
 #define CERT_FILE "certs/server.crt"
@@ -56,26 +68,88 @@ static char *load_file(const char *path) {
     return buf;
 }
 
-static int extract_xy(const char *json, int *x, int *y) {
-    cJSON *root = cJSON_Parse(json);
-    if (!root) return 0;
+static int run_cmd(const char *cmd) {
+    int rc = system(cmd);
 
-    cJSON *player = cJSON_GetObjectItemCaseSensitive(root, "player");
-    cJSON *pos = NULL;
-    cJSON *x_item = NULL;
-    cJSON *y_item = NULL;
-
-    if (cJSON_IsObject(player)) {
-        pos = cJSON_GetObjectItemCaseSensitive(player, "position");
+    if (rc == -1) {
+        perror("system");
+        return 0;
     }
 
-    if (!cJSON_IsObject(pos)) {
+    if (WIFEXITED(rc) && WEXITSTATUS(rc) == 0) {
+        return 1;
+    }
+
+    if (WIFEXITED(rc)) {
+        fprintf(stderr, "Command failed with exit code %d\n", WEXITSTATUS(rc));
+    } else {
+        fprintf(stderr, "Command did not exit normally\n");
+    }
+
+    fprintf(stderr, "Command was:\n%s\n", cmd);
+    return 0;
+}
+
+static int publish_twist_count(int times, double linear_x, double angular_z) {
+    char cmd[1024];
+
+    snprintf(
+        cmd,
+        sizeof(cmd),
+        "/bin/bash -lc '. /opt/ros/humble/setup.bash; "
+        "[ -f \"$HOME/ros2_ws/install/setup.bash\" ] && . \"$HOME/ros2_ws/install/setup.bash\"; "
+        "ros2 topic pub --times %d -r 10 /cmd_vel geometry_msgs/msg/Twist "
+        "\"{linear: {x: %.3f}, angular: {z: %.3f}}\" >/dev/null 2>&1'",
+        times, linear_x, angular_z
+    );
+
+    return run_cmd(cmd);
+}
+
+static void stop_robot(void) {
+    publish_twist_count(5, 0.0, 0.0);
+}
+
+static void move_forward(void) {
+    publish_twist_count(20, 0.10, 0.0);
+    stop_robot();
+}
+
+static void turn_left(void) {
+    publish_twist_count(12, 0.0, 0.8);
+    stop_robot();
+}
+
+static void turn_right(void) {
+    publish_twist_count(12, 0.0, -0.8);
+    stop_robot();
+}
+
+static void turn_around(void) {
+    publish_twist_count(24, 0.0, 0.8);
+    stop_robot();
+}
+
+static int extract_xy(const char *json, int *x, int *y) {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
+        return 0;
+    }
+
+    cJSON *player = cJSON_GetObjectItemCaseSensitive(root, "player");
+    if (!cJSON_IsObject(player)) {
         cJSON_Delete(root);
         return 0;
     }
 
-    x_item = cJSON_GetObjectItemCaseSensitive(pos, "x");
-    y_item = cJSON_GetObjectItemCaseSensitive(pos, "y");
+    cJSON *position = cJSON_GetObjectItemCaseSensitive(player, "position");
+    if (!cJSON_IsObject(position)) {
+        cJSON_Delete(root);
+        return 0;
+    }
+
+    cJSON *x_item = cJSON_GetObjectItemCaseSensitive(position, "x");
+    cJSON *y_item = cJSON_GetObjectItemCaseSensitive(position, "y");
 
     if (!cJSON_IsNumber(x_item) || !cJSON_IsNumber(y_item)) {
         cJSON_Delete(root);
@@ -87,35 +161,6 @@ static int extract_xy(const char *json, int *x, int *y) {
 
     cJSON_Delete(root);
     return 1;
-}
-
-static void stop_robot(void) {
-    system("timeout 1s ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "
-           "\"{linear: {x: 0.0}, angular: {z: 0.0}}\" >/dev/null 2>&1");
-}
-
-static void move_forward(void) {
-    system("timeout 2s ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "
-           "\"{linear: {x: 0.1}, angular: {z: 0.0}}\" >/dev/null 2>&1");
-    stop_robot();
-}
-
-static void turn_left(void) {
-    system("timeout 1.2s ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "
-           "\"{linear: {x: 0.0}, angular: {z: 0.8}}\" >/dev/null 2>&1");
-    stop_robot();
-}
-
-static void turn_right(void) {
-    system("timeout 1.2s ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "
-           "\"{linear: {x: 0.0}, angular: {z: -0.8}}\" >/dev/null 2>&1");
-    stop_robot();
-}
-
-static void turn_around(void) {
-    system("timeout 2.4s ros2 topic pub -r 5 /cmd_vel geometry_msgs/msg/Twist "
-           "\"{linear: {x: 0.0}, angular: {z: 0.8}}\" >/dev/null 2>&1");
-    stop_robot();
 }
 
 static void handle_movement(int new_x, int new_y) {
@@ -158,6 +203,27 @@ static void handle_movement(int new_x, int new_y) {
     cur_y = new_y;
 }
 
+static enum MHD_Result send_json(
+    struct MHD_Connection *connection,
+    unsigned int status_code,
+    const char *json_text)
+{
+    struct MHD_Response *response = MHD_create_response_from_buffer(
+        strlen(json_text),
+        (void *)json_text,
+        MHD_RESPMEM_PERSISTENT
+    );
+
+    if (!response) {
+        return MHD_NO;
+    }
+
+    MHD_add_response_header(response, "Content-Type", "application/json");
+    enum MHD_Result ret = MHD_queue_response(connection, status_code, response);
+    MHD_destroy_response(response);
+    return ret;
+}
+
 static void request_completed(
     void *cls,
     struct MHD_Connection *connection,
@@ -168,7 +234,7 @@ static void request_completed(
     (void)connection;
     (void)toe;
 
-    Buffer *buf = *con_cls;
+    Buffer *buf = (Buffer *)*con_cls;
     if (buf) {
         free(buf->data);
         free(buf);
@@ -189,13 +255,12 @@ static enum MHD_Result handle_request(
     (void)cls;
     (void)version;
 
-    if (strcmp(method, "POST") != 0 || strcmp(url, "/move") != 0) {
-        const char *reply = "{\"status\":\"not found\"}";
-        struct MHD_Response *response =
-            MHD_create_response_from_buffer(strlen(reply), (void *)reply, MHD_RESPMEM_PERSISTENT);
-        enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
-        MHD_destroy_response(response);
-        return ret;
+    if (strcmp(url, "/move") != 0) {
+        return send_json(connection, MHD_HTTP_NOT_FOUND, "{\"status\":\"not found\"}");
+    }
+
+    if (strcmp(method, "POST") != 0) {
+        return send_json(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "{\"status\":\"method not allowed\"}");
     }
 
     if (*con_cls == NULL) {
@@ -225,24 +290,12 @@ static enum MHD_Result handle_request(
     }
 
     int x, y;
-    const char *reply_ok = "{\"status\":\"ok\"}";
-    const char *reply_bad = "{\"status\":\"bad json\"}";
-    struct MHD_Response *response;
-    enum MHD_Result ret;
-
     if (buf->data && extract_xy(buf->data, &x, &y)) {
         handle_movement(x, y);
-        response = MHD_create_response_from_buffer(
-            strlen(reply_ok), (void *)reply_ok, MHD_RESPMEM_PERSISTENT);
-        ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
-    } else {
-        response = MHD_create_response_from_buffer(
-            strlen(reply_bad), (void *)reply_bad, MHD_RESPMEM_PERSISTENT);
-        ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+        return send_json(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
     }
 
-    MHD_destroy_response(response);
-    return ret;
+    return send_json(connection, MHD_HTTP_BAD_REQUEST, "{\"status\":\"bad json\"}");
 }
 
 int main(void) {
