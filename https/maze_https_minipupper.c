@@ -14,6 +14,8 @@ Run this program from the directory that contains:
   certs/server.key
 */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <microhttpd.h>
 #include <cjson/cJSON.h>
 
@@ -21,7 +23,7 @@ Run this program from the directory that contains:
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <time.h>
 #include <sys/wait.h>
 
 #define PORT 8447
@@ -96,6 +98,15 @@ static char *load_file(const char *path) {
     return buf;
 }
 
+static void settle_delay_us(long microseconds) {
+    struct timespec ts;
+    ts.tv_sec = microseconds / 1000000L;
+    ts.tv_nsec = (microseconds % 1000000L) * 1000L;
+
+    while (nanosleep(&ts, &ts) == -1) {
+    }
+}
+
 static int run_cmd(const char *cmd) {
     int rc = system(cmd);
 
@@ -133,25 +144,25 @@ static void stop_robot(void) {
 static void move_forward_small(void) {
     publish_twist_count(FORWARD_COUNT, FORWARD_SPEED, 0.0);
     stop_robot();
-    usleep(SETTLE_US);
+    settle_delay_us(SETTLE_US);
 }
 
 static void turn_left_90(void) {
     publish_twist_count(TURN90_COUNT, 0.0, TURN_SPEED);
     stop_robot();
-    usleep(SETTLE_US);
+    settle_delay_us(SETTLE_US);
 }
 
 static void turn_right_90(void) {
     publish_twist_count(TURN90_COUNT, 0.0, -TURN_SPEED);
     stop_robot();
-    usleep(SETTLE_US);
+    settle_delay_us(SETTLE_US);
 }
 
 static void turn_around_180(void) {
     publish_twist_count(TURN180_COUNT, 0.0, TURN_SPEED);
     stop_robot();
-    usleep(SETTLE_US);
+    settle_delay_us(SETTLE_US);
 }
 
 static int extract_xy(const char *json, int *x, int *y) {
