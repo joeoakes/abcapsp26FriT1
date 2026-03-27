@@ -1,6 +1,5 @@
 // Compile with:
-// gcc -O2 -Wall -Wextra -std=c11 maze_https_redis.c -o maze_https_redis \
-//     $(pkg-config --cflags --libs libmicrohttpd hiredis libbson-1.0 gnutls)
+// gcc -O2 -Wall -Wextra -std=c11 maze_https_redis.c -o maze_https_redis $(pkg-config --cflags --libs libmicrohttpd hiredis libbson-1.0 gnutls)
 
 #include <microhttpd.h>
 #include <hiredis/hiredis.h>
@@ -11,7 +10,7 @@
 #include <strings.h>   // for strcasecmp if needed
 
 #define DEFAULT_PORT        8447
-#define DEFAULT_REDIS_PORT    6379
+#define DEFAULT_REDIS_PORT    6371
 
 static const char *cert_file = "certs/server.crt";
 static const char *key_file  = "certs/server.key";
