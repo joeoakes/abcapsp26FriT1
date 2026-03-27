@@ -1,9 +1,15 @@
 /*
 Compile:
 gcc -Wall -Wextra -O2 -std=c11 maze_https_minipupper.c -o maze_https_minipupper \
-  $(pkg-config --cflags --libs libmicrohttpd libcjson)
+  $(pkg-config --cflags --libs libmicrohttpd libcjson) -lpthread
 
-Run from the directory that contains:
+Run from a shell where ROS 2 is already sourced, for example:
+source ~/.bashrc
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+./maze_https_minipupper
+
+Run this program from the directory that contains:
   certs/server.crt
   certs/server.key
 */
@@ -11,6 +17,7 @@ Run from the directory that contains:
 #include <microhttpd.h>
 #include <cjson/cJSON.h>
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,14 +28,35 @@ Run from the directory that contains:
 #define CERT_FILE "certs/server.crt"
 #define KEY_FILE  "certs/server.key"
 
-static int cur_x = 0;
-static int cur_y = 0;
-static int initialized = 0;
+#define PUB_RATE       15
+#define STOP_COUNT     2
+#define FORWARD_COUNT  3
+#define TURN90_COUNT   4
+#define TURN180_COUNT  8
+
+#define FORWARD_SPEED  0.05
+#define TURN_SPEED     0.75
+
+#define SETTLE_US      120000
 
 typedef struct {
     char *data;
     size_t size;
 } Buffer;
+
+typedef enum {
+    DIR_NORTH = 0,
+    DIR_EAST  = 1,
+    DIR_SOUTH = 2,
+    DIR_WEST  = 3
+} Heading;
+
+static int cur_x = 0;
+static int cur_y = 0;
+static int initialized = 0;
+static Heading heading = DIR_NORTH;
+
+static pthread_mutex_t move_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static char *load_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -80,13 +108,7 @@ static int run_cmd(const char *cmd) {
         return 1;
     }
 
-    if (WIFEXITED(rc)) {
-        fprintf(stderr, "Command failed with exit code %d\n", WEXITSTATUS(rc));
-    } else {
-        fprintf(stderr, "Command did not exit normally\n");
-    }
-
-    fprintf(stderr, "Command was:\n%s\n", cmd);
+    fprintf(stderr, "Command failed:\n%s\n", cmd);
     return 0;
 }
 
@@ -96,38 +118,40 @@ static int publish_twist_count(int times, double linear_x, double angular_z) {
     snprintf(
         cmd,
         sizeof(cmd),
-        "/bin/bash -lc '. /opt/ros/humble/setup.bash; "
-        "[ -f \"$HOME/ros2_ws/install/setup.bash\" ] && . \"$HOME/ros2_ws/install/setup.bash\"; "
-        "ros2 topic pub --times %d -r 10 /cmd_vel geometry_msgs/msg/Twist "
-        "\"{linear: {x: %.3f}, angular: {z: %.3f}}\" >/dev/null 2>&1'",
-        times, linear_x, angular_z
+        "ros2 topic pub --times %d -r %d /cmd_vel geometry_msgs/msg/Twist "
+        "\"{linear: {x: %.3f}, angular: {z: %.3f}}\" >/dev/null 2>&1",
+        times, PUB_RATE, linear_x, angular_z
     );
 
     return run_cmd(cmd);
 }
 
 static void stop_robot(void) {
-    publish_twist_count(5, 0.0, 0.0);
+    publish_twist_count(STOP_COUNT, 0.0, 0.0);
 }
 
-static void move_forward(void) {
-    publish_twist_count(20, 0.10, 0.0);
+static void move_forward_small(void) {
+    publish_twist_count(FORWARD_COUNT, FORWARD_SPEED, 0.0);
     stop_robot();
+    usleep(SETTLE_US);
 }
 
-static void turn_left(void) {
-    publish_twist_count(12, 0.0, 0.8);
+static void turn_left_90(void) {
+    publish_twist_count(TURN90_COUNT, 0.0, TURN_SPEED);
     stop_robot();
+    usleep(SETTLE_US);
 }
 
-static void turn_right(void) {
-    publish_twist_count(12, 0.0, -0.8);
+static void turn_right_90(void) {
+    publish_twist_count(TURN90_COUNT, 0.0, -TURN_SPEED);
     stop_robot();
+    usleep(SETTLE_US);
 }
 
-static void turn_around(void) {
-    publish_twist_count(24, 0.0, 0.8);
+static void turn_around_180(void) {
+    publish_twist_count(TURN180_COUNT, 0.0, TURN_SPEED);
     stop_robot();
+    usleep(SETTLE_US);
 }
 
 static int extract_xy(const char *json, int *x, int *y) {
@@ -163,13 +187,38 @@ static int extract_xy(const char *json, int *x, int *y) {
     return 1;
 }
 
+static Heading heading_for_delta(int dx, int dy) {
+    if (dx == 0 && dy == -1) return DIR_NORTH;
+    if (dx == 1 && dy == 0)  return DIR_EAST;
+    if (dx == 0 && dy == 1)  return DIR_SOUTH;
+    return DIR_WEST;
+}
+
+static void rotate_to_heading(Heading target) {
+    int diff = ((int)target - (int)heading + 4) % 4;
+
+    if (diff == 1) {
+        turn_right_90();
+    } else if (diff == 2) {
+        turn_around_180();
+    } else if (diff == 3) {
+        turn_left_90();
+    }
+
+    heading = target;
+}
+
 static void handle_movement(int new_x, int new_y) {
+    pthread_mutex_lock(&move_mutex);
+
     if (!initialized) {
         cur_x = new_x;
         cur_y = new_y;
+        heading = DIR_NORTH;
         initialized = 1;
         printf("[INIT] (%d,%d)\n", cur_x, cur_y);
         fflush(stdout);
+        pthread_mutex_unlock(&move_mutex);
         return;
     }
 
@@ -178,35 +227,31 @@ static void handle_movement(int new_x, int new_y) {
 
     printf("[MOVE] (%d,%d) -> (%d,%d)\n", cur_x, cur_y, new_x, new_y);
 
-    if (dx == 1 && dy == 0) {
-        printf("-> RIGHT\n");
-        turn_right();
-        move_forward();
-    } else if (dx == -1 && dy == 0) {
-        printf("<- LEFT\n");
-        turn_left();
-        move_forward();
-    } else if (dx == 0 && dy == -1) {
-        printf("^ UP\n");
-        move_forward();
-    } else if (dx == 0 && dy == 1) {
-        printf("v DOWN\n");
-        turn_around();
-        move_forward();
-    } else {
+    if (!((dx == 1 && dy == 0) ||
+          (dx == -1 && dy == 0) ||
+          (dx == 0 && dy == 1) ||
+          (dx == 0 && dy == -1))) {
         printf("[WARN] Invalid step\n");
+        fflush(stdout);
+        pthread_mutex_unlock(&move_mutex);
+        return;
     }
 
-    fflush(stdout);
+    Heading target = heading_for_delta(dx, dy);
+    rotate_to_heading(target);
+    move_forward_small();
+    stop_robot();
 
     cur_x = new_x;
     cur_y = new_y;
+
+    fflush(stdout);
+    pthread_mutex_unlock(&move_mutex);
 }
 
-static enum MHD_Result send_json(
-    struct MHD_Connection *connection,
-    unsigned int status_code,
-    const char *json_text)
+static enum MHD_Result send_json(struct MHD_Connection *connection,
+                                 unsigned int status_code,
+                                 const char *json_text)
 {
     struct MHD_Response *response = MHD_create_response_from_buffer(
         strlen(json_text),
@@ -219,16 +264,16 @@ static enum MHD_Result send_json(
     }
 
     MHD_add_response_header(response, "Content-Type", "application/json");
+
     enum MHD_Result ret = MHD_queue_response(connection, status_code, response);
     MHD_destroy_response(response);
     return ret;
 }
 
-static void request_completed(
-    void *cls,
-    struct MHD_Connection *connection,
-    void **con_cls,
-    enum MHD_RequestTerminationCode toe)
+static void request_completed(void *cls,
+                              struct MHD_Connection *connection,
+                              void **con_cls,
+                              enum MHD_RequestTerminationCode toe)
 {
     (void)cls;
     (void)connection;
@@ -242,15 +287,14 @@ static void request_completed(
     }
 }
 
-static enum MHD_Result handle_request(
-    void *cls,
-    struct MHD_Connection *connection,
-    const char *url,
-    const char *method,
-    const char *version,
-    const char *upload_data,
-    size_t *upload_data_size,
-    void **con_cls)
+static enum MHD_Result handle_request(void *cls,
+                                      struct MHD_Connection *connection,
+                                      const char *url,
+                                      const char *method,
+                                      const char *version,
+                                      const char *upload_data,
+                                      size_t *upload_data_size,
+                                      void **con_cls)
 {
     (void)cls;
     (void)version;
@@ -310,7 +354,7 @@ int main(void) {
     }
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
-        MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_TLS,
+        MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
         PORT,
         NULL, NULL,
         &handle_request, NULL,
