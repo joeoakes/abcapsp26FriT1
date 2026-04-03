@@ -1,5 +1,6 @@
 // Compile using: gcc -O2 -Wall -Wextra -std=c11 maze_https_mongo.c -o maze_https_mongo   $(pkg-config --cflags --libs libmicrohttpd libmongoc-1.0 gnutls)
 // Run using: ./maze_https_mongo
+#define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <microhttpd.h>
 #include <mongoc/mongoc.h>
@@ -55,7 +56,7 @@ struct app_config {
 
 static struct app_config config;
 
-static int handle_post(void *cls,
+static enum MHD_Result handle_post(void *cls,
                        struct MHD_Connection *connection,
                        const char *url,
                        const char *method,
@@ -114,7 +115,7 @@ static int handle_post(void *cls,
                                          (void *)response,
                                          MHD_RESPMEM_PERSISTENT);
 
-    int ret = MHD_queue_response(connection, MHD_HTTP_OK, resp);
+    enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, resp);
     MHD_destroy_response(resp);
 
     free(ci->data);

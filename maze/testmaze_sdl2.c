@@ -2,7 +2,7 @@
 Compile:
 gcc -Wall -Wextra -O2 -std=c11 maze_sdl2.c -o maze_sdl2 $(sdl2-config --cflags --libs)
 
-Run with network:
+Run with networ===-
 ./maze_sdl2
 
 Run without network:
@@ -14,6 +14,7 @@ export MOVE_ENDPOINT_2="https://10.170.8.130:8447/move"
 export MISSION_ENDPOINT="https://10.170.8.130:8447/mission"
 */
 
+#include <curl/curl.h>
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -31,8 +32,8 @@ export MISSION_ENDPOINT="https://10.170.8.130:8447/mission"
 #define MAZE_H 15
 #define CELL   32
 #define PAD    16
-
 #define MOVE_COOLDOWN_MS 325
+
 
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
@@ -691,6 +692,7 @@ int main(void) {
             }
 
             if (moved) {
+
                 move_sequence++;
                 mission.moves_total++;
                 mission.distance_traveled += 1.0f;

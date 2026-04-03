@@ -31,15 +31,15 @@ Run this program from the directory that contains:
 #define KEY_FILE  "certs/server.key"
 
 #define PUB_RATE       15
-#define STOP_COUNT     2
-#define FORWARD_COUNT  3
-#define TURN90_COUNT   4
-#define TURN180_COUNT  8
+#define STOP_COUNT     1
+#define FORWARD_COUNT  2
+#define TURN90_COUNT   3
+#define TURN180_COUNT  6
 
 #define FORWARD_SPEED  0.05
 #define TURN_SPEED     0.75
 
-#define SETTLE_US      120000
+#define SETTLE_US      60000
 
 typedef struct {
     char *data;
@@ -59,6 +59,12 @@ static int initialized = 0;
 static Heading heading = DIR_NORTH;
 
 static pthread_mutex_t move_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t move_cond = PTHREAD_COND_INITIALIZER;
+static pthread_t move_worker_thread;
+static int pending_x = 0;
+static int pending_y = 0;
+static int move_pending = 0;
+static int shutdown_requested = 0;
 
 static char *load_file(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -251,13 +257,43 @@ static void handle_movement(int new_x, int new_y) {
     Heading target = heading_for_delta(dx, dy);
     rotate_to_heading(target);
     move_forward_small();
-    stop_robot();
 
     cur_x = new_x;
     cur_y = new_y;
 
     fflush(stdout);
     pthread_mutex_unlock(&move_mutex);
+}
+
+
+static void *move_worker_main(void *arg) {
+    (void)arg;
+
+    for (;;) {
+        int x = 0;
+        int y = 0;
+
+        pthread_mutex_lock(&move_mutex);
+
+        while (!move_pending && !shutdown_requested) {
+            pthread_cond_wait(&move_cond, &move_mutex);
+        }
+
+        if (shutdown_requested) {
+            pthread_mutex_unlock(&move_mutex);
+            break;
+        }
+
+        x = pending_x;
+        y = pending_y;
+        move_pending = 0;
+
+        pthread_mutex_unlock(&move_mutex);
+
+        handle_movement(x, y);
+    }
+
+    return NULL;
 }
 
 static enum MHD_Result send_json(struct MHD_Connection *connection,
@@ -346,7 +382,13 @@ static enum MHD_Result handle_request(void *cls,
 
     int x, y;
     if (buf->data && extract_xy(buf->data, &x, &y)) {
-        handle_movement(x, y);
+        pthread_mutex_lock(&move_mutex);
+        pending_x = x;
+        pending_y = y;
+        move_pending = 1;
+        pthread_cond_signal(&move_cond);
+        pthread_mutex_unlock(&move_mutex);
+
         return send_json(connection, MHD_HTTP_OK, "{\"status\":\"ok\"}");
     }
 
@@ -359,6 +401,13 @@ int main(void) {
 
     if (!cert_pem || !key_pem) {
         fprintf(stderr, "Failed to load TLS certificate or key\n");
+        free(cert_pem);
+        free(key_pem);
+        return 1;
+    }
+
+    if (pthread_create(&move_worker_thread, NULL, move_worker_main, NULL) != 0) {
+        fprintf(stderr, "Failed to start move worker thread\n");
         free(cert_pem);
         free(key_pem);
         return 1;
@@ -385,6 +434,13 @@ int main(void) {
     printf("Server running on https://0.0.0.0:%d/move\n", PORT);
     printf("Press Enter to stop...\n");
     getchar();
+
+    pthread_mutex_lock(&move_mutex);
+    shutdown_requested = 1;
+    pthread_cond_signal(&move_cond);
+    pthread_mutex_unlock(&move_mutex);
+
+    pthread_join(move_worker_thread, NULL);
 
     MHD_stop_daemon(daemon);
     free(cert_pem);
