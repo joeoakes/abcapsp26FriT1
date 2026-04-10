@@ -62,3 +62,8 @@ https/maze_https_redis
 http/maze_http_mongo
 maze/missions/mission_dashboard
 https/maze_https_minipupper
+# Build & temp
+bin/
+build/
+*.bak
+*.zip
