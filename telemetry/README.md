@@ -117,10 +117,10 @@ Expected response: `{"status":"ok"}` (HTTP 200)
 ### Curl – Test `/mission`
 
 ```bash
-curl -k -v -X POST "https://10.170.8.109:8447/mission" \
+curl -k --cert client.crt --key client.key -X POST "https://10.170.8.109:8447/mission" \
   -H "Content-Type: application/json" \
   -d '{
-    "mission_id": "test-mission-20260222-001",
+    "mission_id": "test-mission-20260222-003",
     "robot_id": "maze_sim",
     "mission_type": "maze_navigation",
     "start_time": "2026-02-22T16:00:00Z",
