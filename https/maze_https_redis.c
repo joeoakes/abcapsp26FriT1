@@ -452,7 +452,15 @@ int main(void)
                 redis_ctx ? redis_ctx->errstr : "allocation error");
         return 1;
     }
-    printf("Connected to Redis at %s:%d\n", redis_host, redis_port);
+
+    redisReply *reply = redisCommand(redis_ctx, "SELECT 7");
+    if (!reply) {
+        fprintf(stderr, "Failed to select Redis DB 7\n");
+        redisFree(redis_ctx);
+        return 1;
+    }
+    freeReplyObject(reply);
+    printf("Connected to Redis at %s:%d (DB 7)\n", redis_host, redis_port);
 
     char *cert = read_file(cert_file);
     char *key  = read_file(key_file);
