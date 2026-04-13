@@ -20,6 +20,7 @@ static const char *key_file  = "certs/server.key";
 static const char *ca_file   = "certs/ca.crt";
 
 static redisContext *redis_ctx;
+static const char *dashboard_html = NULL;
 static pthread_mutex_t redis_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char *cached_cert = NULL;
 static char *cached_key = NULL;
@@ -229,119 +230,74 @@ static char *get_missions_json(void)
 }
 
 /* ----------------------------------------------------------------------------
-   Embedded Dashboard HTML (same as before)
+   Fetch telemetry moves from the MongoDB server via curl
    ---------------------------------------------------------------------------- */
-static const char *dashboard_html =
-"<!DOCTYPE html>\n"
-"<html lang=\"en\">\n"
-"<head>\n"
-"    <meta charset=\"UTF-8\">\n"
-"    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-"    <title>Maze Mission Dashboard</title>\n"
-"    <script src=\"https://cdn.tailwindcss.com\"></script>\n"
-"    <style>\n"
-"        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');\n"
-"        body { font-family: 'Inter', system_ui, sans-serif; }\n"
-"        .mission-table tr:hover { background-color: #1f2937; }\n"
-"    </style>\n"
-"</head>\n"
-"<body class=\"bg-gray-950 text-gray-100\">\n"
-"    <div class=\"max-w-screen-2xl mx-auto p-8\">\n"
-"        <div class=\"flex items-center justify-between mb-10\">\n"
-"            <div>\n"
-"                <div class=\"flex items-center gap-x-3\">\n"
-"                    <div class=\"w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center text-3xl\">🧭</div>\n"
-"                    <h1 class=\"text-5xl font-semibold tracking-tight\">Maze Mission Dashboard</h1>\n"
-"                </div>\n"
-"                <p class=\"text-gray-400 mt-1\">Real-time mission data • Powered by Redis</p>\n"
-"            </div>\n"
-"            <div class=\"flex items-center gap-x-4\">\n"
-"                <button onclick=\"loadMissions()\" class=\"flex items-center gap-x-2 bg-white text-gray-900 hover:bg-emerald-400 px-6 py-3 rounded-3xl font-medium transition-colors\">\n"
-"                    <span>↻</span> Refresh Now\n"
-"                </button>\n"
-"                <div id=\"last-updated\" class=\"text-xs text-gray-500 font-mono\"></div>\n"
-"            </div>\n"
-"        </div>\n"
-"        <div id=\"summary-cards\" class=\"grid grid-cols-1 md:grid-cols-3 gap-6 mb-10\"></div>\n"
-"        <div class=\"bg-gray-900 rounded-3xl overflow-hidden border border-gray-800\">\n"
-"            <div class=\"px-8 py-5 border-b border-gray-800 flex items-center justify-between\">\n"
-"                <h2 class=\"text-xl font-semibold\">All Missions</h2>\n"
-"                <span id=\"mission-count-badge\" class=\"inline-flex items-center px-4 h-8 rounded-3xl bg-gray-800 text-sm font-medium\"></span>\n"
-"            </div>\n"
-"            <div class=\"overflow-x-auto\">\n"
-"                <table class=\"w-full mission-table\">\n"
-"                    <thead>\n"
-"                        <tr class=\"bg-gray-950 text-xs uppercase tracking-widest text-gray-400 border-b border-gray-800\">\n"
-"                            <th class=\"px-8 py-5 text-left\">Mission ID</th>\n"
-"                            <th class=\"px-8 py-5 text-left\">Robot ID</th>\n"
-"                            <th class=\"px-8 py-5 text-left\">Type</th>\n"
-"                            <th class=\"px-8 py-5 text-left\">Start Time</th>\n"
-"                            <th class=\"px-8 py-5 text-left\">End Time</th>\n"
-"                            <th class=\"px-8 py-5 text-left\">Result</th>\n"
-"                            <th class=\"px-8 py-5 text-right\">Distance (m)</th>\n"
-"                            <th class=\"px-8 py-5 text-right\">Duration (s)</th>\n"
-"                            <th class=\"px-8 py-5 text-right\">Total Moves</th>\n"
-"                        </tr>\n"
-"                    </thead>\n"
-"                    <tbody id=\"missions-body\" class=\"text-sm divide-y divide-gray-800\"></tbody>\n"
-"                </table>\n"
-"            </div>\n"
-"        </div>\n"
-"        <div id=\"empty-state\" class=\"hidden text-center py-20\">\n"
-"            <div class=\"text-7xl mb-4\">🧭</div>\n"
-"            <h3 class=\"text-2xl font-medium mb-2\">No missions yet</h3>\n"
-"            <p class=\"text-gray-400 max-w-xs mx-auto\">POST mission data to <span class=\"font-mono bg-gray-900 px-2 py-1 rounded\">/mission</span> and it will appear here instantly.</p>\n"
-"        </div>\n"
-"    </div>\n"
-"    <script>\n"
-"        async function loadMissions() {\n"
-"            try {\n"
-"                const res = await fetch('/api/missions');\n"
-"                const missions = await res.json();\n"
-"                missions.sort((a, b) => (b.start_time || '').localeCompare(a.start_time || ''));\n"
-"                const tbody = document.getElementById('missions-body');\n"
-"                tbody.innerHTML = '';\n"
-"                let successCount = 0, abortedCount = 0, totalDuration = 0, totalDistance = 0, totalMoves = 0;\n"
-"                missions.forEach(m => {\n"
-"                    const result = m.mission_result || 'unknown';\n"
-"                    let resultHTML = '';\n"
-"                    if (result === 'success') { successCount++; resultHTML = `<span class=\"inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-emerald-400 text-gray-900\">SUCCESS</span>`; }\n"
-"                    else if (result === 'aborted') { abortedCount++; resultHTML = `<span class=\"inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-amber-400 text-gray-900\">ABORTED</span>`; }\n"
-"                    else resultHTML = `<span class=\"inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-red-400 text-gray-900\">${result.toUpperCase()}</span>`;\n"
-"                    const row = document.createElement('tr');\n"
-"                    row.innerHTML = `\n"
-"                        <td class=\"px-8 py-5 font-mono text-emerald-300\">${m.mission_id || '-'}</td>\n"
-"                        <td class=\"px-8 py-5\">${m.robot_id || '-'}</td>\n"
-"                        <td class=\"px-8 py-5 font-medium\">${m.mission_type || '-'}</td>\n"
-"                        <td class=\"px-8 py-5 text-gray-400 font-mono text-xs\">${m.start_time || '-'}</td>\n"
-"                        <td class=\"px-8 py-5 text-gray-400 font-mono text-xs\">${m.end_time || '-'}</td>\n"
-"                        <td class=\"px-8 py-5\">${resultHTML}</td>\n"
-"                        <td class=\"px-8 py-5 text-right font-medium\">${m.distance_traveled || '0'}</td>\n"
-"                        <td class=\"px-8 py-5 text-right font-medium\">${m.duration_seconds || '0'}</td>\n"
-"                        <td class=\"px-8 py-5 text-right font-medium\">${m.moves_total || '0'}</td>\n"
-"                    `;\n"
-"                    tbody.appendChild(row);\n"
-"                    if (m.duration_seconds) totalDuration += parseFloat(m.duration_seconds);\n"
-"                    if (m.distance_traveled) totalDistance += parseFloat(m.distance_traveled);\n"
-"                    if (m.moves_total) totalMoves += parseInt(m.moves_total);\n"
-"                });\n"
-"                const total = missions.length;\n"
-"                const successRate = total ? Math.round((successCount / total) * 100) : 0;\n"
-"                const avgDuration = total ? (totalDuration / total).toFixed(1) : '0';\n"
-"                document.getElementById('summary-cards').innerHTML = `\n"
-"                    <div class=\"bg-gray-900 rounded-3xl p-8 flex flex-col\"><div class=\"text-emerald-400 text-sm font-medium\">TOTAL MISSIONS</div><div class=\"text-7xl font-semibold mt-2\">${total}</div></div>\n"
-"                    <div class=\"bg-gray-900 rounded-3xl p-8 flex flex-col\"><div class=\"text-emerald-400 text-sm font-medium\">SUCCESS RATE</div><div class=\"text-7xl font-semibold mt-2\">${successRate}<span class=\"text-3xl\">%</span></div><div class=\"text-xs text-gray-400 mt-1\">${successCount} successful</div></div>\n"
-"                    <div class=\"bg-gray-900 rounded-3xl p-8 flex flex-col\"><div class=\"text-emerald-400 text-sm font-medium\">AVG DURATION</div><div class=\"text-7xl font-semibold mt-2\">${avgDuration}<span class=\"text-3xl\">s</span></div><div class=\"text-xs text-gray-400 mt-1\">${totalMoves} total moves</div></div>\n"
-"                `;\n"
-"                document.getElementById('mission-count-badge').textContent = `${total} missions`;\n"
-"                document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;\n"
-"                document.getElementById('empty-state').classList.toggle('hidden', total > 0);\n"
-"            } catch (err) { console.error(err); }\n"
-"        }\n"
-"        window.onload = () => { loadMissions(); setInterval(loadMissions, 3000); };\n"
-"    </script>\n"
-"</body>\n"
-"</html>\n";
+static char *fetch_moves_from_mongo(void)
+{
+    const char *mongo_api = getenv("MONGO_MOVE_API");
+    if (!mongo_api || !*mongo_api) {
+        mongo_api = "https://localhost:8447/api/moves";
+    }
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "curl -k -s --connect-timeout 2 --max-time 5 \"%s\" 2>/dev/null",
+             mongo_api);
+
+    FILE *pipe = popen(cmd, "r");
+    if (!pipe) {
+        return strdup("[]");
+    }
+
+    size_t cap = 16384;
+    char *buf = malloc(cap);
+    if (!buf) {
+        pclose(pipe);
+        return strdup("[]");
+    }
+
+    size_t pos = 0;
+    char line[4096];
+
+    while (fgets(line, sizeof(line), pipe)) {
+        size_t len = strlen(line);
+        if (pos + len >= cap) {
+            cap *= 2;
+            char *tmp = realloc(buf, cap);
+            if (!tmp) break;
+            buf = tmp;
+        }
+        memcpy(buf + pos, line, len);
+        pos += len;
+    }
+
+    buf[pos] = '\0';
+    pclose(pipe);
+
+    // If empty or failed, return empty array
+    if (pos == 0) {
+        free(buf);
+        return strdup("[]");
+    }
+
+    return buf;
+}
+
+/* ----------------------------------------------------------------------------
+   Load HTML file into memory
+   ---------------------------------------------------------------------------- */
+static char *load_dashboard_html(const char *path)
+{
+    char *content = read_file(path);
+    if (!content) {
+        fprintf(stderr, "ERROR: Could not load dashboard from %s\n", path);
+        const char *fallback =
+            "<!DOCTYPE html><html><head><title>Error</title></head>"
+            "<body><h1>Failed to load dashboard.html</h1></body></html>";
+        return strdup(fallback);
+    }
+    return content;
+}
 
 /* ----------------------------------------------------------------------------
    Connection info for POST
@@ -432,6 +388,17 @@ http_handler(void *cls,
 
         if (strcmp(url, "/api/missions") == 0) {
             char *json = get_missions_json();
+            struct MHD_Response *response = MHD_create_response_from_buffer(
+                strlen(json), json, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            MHD_add_response_header(response, "Cache-Control", "no-cache");
+            enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+
+        if (strcmp(url, "/api/moves") == 0) {
+            char *json = fetch_moves_from_mongo();
             struct MHD_Response *response = MHD_create_response_from_buffer(
                 strlen(json), json, MHD_RESPMEM_MUST_FREE);
             MHD_add_response_header(response, "Content-Type", "application/json");
@@ -558,6 +525,8 @@ int main(void)
         return 1;
     }
 
+    dashboard_html = load_dashboard_html("../dashboard/dashboard.html");
+
     // Start HTTPS server with mTLS
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
@@ -581,9 +550,6 @@ int main(void)
     printf("Server running on https://0.0.0.0:%d\n", DEFAULT_PORT);
     printf("   → Dashboard: https://127.0.0.1:%d/dashboard\n", DEFAULT_PORT);
     printf("   → API: https://127.0.0.1:%d/api/missions\n", DEFAULT_PORT);
-    printf("\n*** mTLS is ENABLED - Client certificate required! ***\n");
-    printf("*** Redis access is THREAD-SAFE (protected by mutex) ***\n");
-    printf("Test with: curl -k --cert client.crt --key client.key https://localhost:%d/dashboard\n", DEFAULT_PORT);
     printf("\nPress Enter to stop...\n");
 
     getchar();

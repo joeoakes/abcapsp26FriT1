@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Maze Mission Dashboard</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+            body {
+                font-family: 'Inter', system_ui, sans-serif;
+            }
+            .mission-table tr:hover,
+            .moves-table tr:hover {
+                background-color: #1f2937;
+            }
+            .moves-table th {
+                font-weight: 600;
+            }
+        </style>
+    </head>
+    <body class="bg-gray-950 text-gray-100">
+        <div class="max-w-screen-2xl mx-auto p-8">
+            <!-- Header -->
+            <div class="flex items-center justify-between mb-10">
+                <div>
+                    <div class="flex items-center gap-x-3">
+                        <div class="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center text-3xl">
+                            🧭
+                        </div>
+                        <h1 class="text-5xl font-semibold tracking-tight">Maze Mission Dashboard</h1>
+                    </div>
+                    <p class="text-gray-400 mt-1">Real-time mission data • Powered by Redis + MongoDB Telemetry</p>
+                </div>
+
+                <div class="flex items-center gap-x-4">
+                    <button
+                        onclick="loadAllData()"
+                        class="flex items-center gap-x-2 bg-white text-gray-900 hover:bg-emerald-400 px-6 py-3 rounded-3xl font-medium transition-colors">
+                        <span>↻</span> Refresh Now
+                    </button>
+                    <div id="last-updated" class="text-xs text-gray-500 font-mono"></div>
+                </div>
+            </div>
+
+            <!-- Summary Cards -->
+            <div id="summary-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10"></div>
+
+            <!-- Missions Table -->
+            <div class="bg-gray-900 rounded-3xl overflow-hidden border border-gray-800 mb-16">
+                <div class="px-8 py-5 border-b border-gray-800 flex items-center justify-between">
+                    <h2 class="text-xl font-semibold">All Missions</h2>
+                    <span
+                        id="mission-count-badge"
+                        class="inline-flex items-center px-4 h-8 rounded-3xl bg-gray-800 text-sm font-medium"></span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full mission-table">
+                        <thead>
+                            <tr
+                                class="bg-gray-950 text-xs uppercase tracking-widest text-gray-400 border-b border-gray-800">
+                                <th class="px-8 py-5 text-left">Mission ID</th>
+                                <th class="px-8 py-5 text-left">Robot ID</th>
+                                <th class="px-8 py-5 text-left">Type</th>
+                                <th class="px-8 py-5 text-left">Start Time</th>
+                                <th class="px-8 py-5 text-left">End Time</th>
+                                <th class="px-8 py-5 text-left">Result</th>
+                                <th class="px-8 py-5 text-right">Distance (m)</th>
+                                <th class="px-8 py-5 text-right">Duration (s)</th>
+                                <th class="px-8 py-5 text-right">Total Moves</th>
+                            </tr>
+                        </thead>
+                        <tbody id="missions-body" class="text-sm divide-y divide-gray-800"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Telemetry Moves Table - More Elaborate -->
+            <div class="bg-gray-900 rounded-3xl overflow-hidden border border-gray-800">
+                <div class="px-8 py-5 border-b border-gray-800 flex items-center justify-between">
+                    <h2 class="text-xl font-semibold">Recent Telemetry Moves</h2>
+                    <span
+                        id="move-count-badge"
+                        class="inline-flex items-center px-4 h-8 rounded-3xl bg-gray-800 text-sm font-medium"></span>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full moves-table">
+                        <thead>
+                            <tr
+                                class="bg-gray-950 text-xs uppercase tracking-widest text-gray-400 border-b border-gray-800">
+                                <th class="px-8 py-5 text-left">Received At</th>
+                                <th class="px-8 py-5 text-left">Event Type</th>
+                                <th class="px-8 py-5 text-left">Device</th>
+                                <th class="px-8 py-5 text-left">Move #</th>
+                                <th class="px-8 py-5 text-left">Position</th>
+                                <th class="px-8 py-5 text-left">Goal Reached</th>
+                                <th class="px-8 py-5 text-left">Original Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody id="moves-body" class="text-sm divide-y divide-gray-800 font-mono"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Empty State -->
+            <div id="empty-state" class="hidden text-center py-20">
+                <div class="text-7xl mb-4">🧭</div>
+                <h3 class="text-2xl font-medium mb-2">No missions yet</h3>
+                <p class="text-gray-400 max-w-xs mx-auto">
+                    POST mission data to <span class="font-mono bg-gray-900 px-2 py-1 rounded">/mission</span> and
+                    telemetry to <span class="font-mono bg-gray-900 px-2 py-1 rounded">/move</span>
+                </p>
+            </div>
+        </div>
+
+        <script>
+            async function loadMissions() {
+                try {
+                    const res = await fetch('/api/missions');
+                    const missions = await res.json();
+
+                    missions.sort((a, b) => (b.start_time || '').localeCompare(a.start_time || ''));
+
+                    const tbody = document.getElementById('missions-body');
+                    tbody.innerHTML = '';
+
+                    let successCount = 0,
+                        abortedCount = 0,
+                        totalDuration = 0,
+                        totalDistance = 0,
+                        totalMoves = 0;
+
+                    missions.forEach((m) => {
+                        const result = m.mission_result || 'unknown';
+                        let resultHTML = '';
+
+                        if (result === 'success') {
+                            successCount++;
+                            resultHTML = `<span class="inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-emerald-400 text-gray-900">SUCCESS</span>`;
+                        } else if (result === 'aborted') {
+                            abortedCount++;
+                            resultHTML = `<span class="inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-amber-400 text-gray-900">ABORTED</span>`;
+                        } else {
+                            resultHTML = `<span class="inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-red-400 text-gray-900">${result.toUpperCase()}</span>`;
+                        }
+
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                        <td class="px-8 py-5 font-mono text-emerald-300">${m.mission_id || '-'}</td>
+                        <td class="px-8 py-5">${m.robot_id || '-'}</td>
+                        <td class="px-8 py-5 font-medium">${m.mission_type || '-'}</td>
+                        <td class="px-8 py-5 text-gray-400 font-mono text-xs">${m.start_time || '-'}</td>
+                        <td class="px-8 py-5 text-gray-400 font-mono text-xs">${m.end_time || '-'}</td>
+                        <td class="px-8 py-5">${resultHTML}</td>
+                        <td class="px-8 py-5 text-right font-medium">${m.distance_traveled || '0'}</td>
+                        <td class="px-8 py-5 text-right font-medium">${m.duration_seconds || '0'}</td>
+                        <td class="px-8 py-5 text-right font-medium">${m.moves_total || '0'}</td>
+                    `;
+                        tbody.appendChild(row);
+
+                        if (m.duration_seconds) totalDuration += parseFloat(m.duration_seconds);
+                        if (m.distance_traveled) totalDistance += parseFloat(m.distance_traveled);
+                        if (m.moves_total) totalMoves += parseInt(m.moves_total);
+                    });
+
+                    const total = missions.length;
+                    const successRate = total ? Math.round((successCount / total) * 100) : 0;
+                    const avgDuration = total ? (totalDuration / total).toFixed(1) : '0';
+
+                    document.getElementById('summary-cards').innerHTML = `
+                    <div class="bg-gray-900 rounded-3xl p-8 flex flex-col">
+                        <div class="text-emerald-400 text-sm font-medium">TOTAL MISSIONS</div>
+                        <div class="text-7xl font-semibold mt-2">${total}</div>
+                    </div>
+                    <div class="bg-gray-900 rounded-3xl p-8 flex flex-col">
+                        <div class="text-emerald-400 text-sm font-medium">SUCCESS RATE</div>
+                        <div class="text-7xl font-semibold mt-2">${successRate}<span class="text-3xl">%</span></div>
+                        <div class="text-xs text-gray-400 mt-1">${successCount} successful</div>
+                    </div>
+                    <div class="bg-gray-900 rounded-3xl p-8 flex flex-col">
+                        <div class="text-emerald-400 text-sm font-medium">AVG DURATION</div>
+                        <div class="text-7xl font-semibold mt-2">${avgDuration}<span class="text-3xl">s</span></div>
+                        <div class="text-xs text-gray-400 mt-1">${totalMoves} total moves</div>
+                    </div>
+                `;
+
+                    document.getElementById('mission-count-badge').textContent = `${total} missions`;
+                    document.getElementById('empty-state').classList.toggle('hidden', total > 0);
+                } catch (err) {
+                    console.error('Failed to load missions:', err);
+                }
+            }
+
+            async function loadMoves() {
+                try {
+                    const res = await fetch('/api/moves');
+                    const moves = await res.json();
+
+                    const tbody = document.getElementById('moves-body');
+                    tbody.innerHTML = '';
+                    let count = 0;
+
+                    moves.forEach((m) => {
+                        count++;
+
+                        const input = m.input || {};
+                        const player = m.player || {};
+                        const position = player.position || {};
+
+                        const moveNum = input.move_sequence !== undefined ? input.move_sequence : '-';
+                        const device = input.device || 'unknown';
+                        const x = position.x !== undefined ? position.x : '?';
+                        const y = position.y !== undefined ? position.y : '?';
+                        const posStr = `(${x}, ${y})`;
+
+                        const goalHTML =
+                            m.goal_reached === true || m.goal_reached === 'true'
+                                ? `<span class="inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-emerald-400 text-gray-900">YES</span>`
+                                : `<span class="inline-flex items-center px-4 h-7 rounded-3xl text-xs font-semibold bg-amber-400 text-gray-900">NO</span>`;
+
+                        const receivedAt = m.received_at || '-';
+                        const originalTs = m.timestamp || '-';
+
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                        <td class="px-8 py-5 text-gray-400 text-xs">${receivedAt}</td>
+                        <td class="px-8 py-5">${m.event_type || 'player_move'}</td>
+                        <td class="px-8 py-5">${device}</td>
+                        <td class="px-8 py-5 font-semibold">${moveNum}</td>
+                        <td class="px-8 py-5">${posStr}</td>
+                        <td class="px-8 py-5">${goalHTML}</td>
+                        <td class="px-8 py-5 text-gray-400 text-xs">${originalTs}</td>
+                    `;
+                        tbody.appendChild(row);
+                    });
+
+                    document.getElementById('move-count-badge').textContent = `${count} recent moves`;
+                } catch (err) {
+                    console.error('Failed to load moves:', err);
+                }
+            }
+
+            async function loadAllData() {
+                await Promise.all([loadMissions(), loadMoves()]);
+                document.getElementById('last-updated').textContent =
+                    `Last updated: ${new Date().toLocaleTimeString()}`;
+            }
+
+            // Initial load + auto-refresh every 3 seconds
+            window.onload = () => {
+                loadAllData();
+                setInterval(loadAllData, 3000);
+            };
+        </script>
+    </body>
+</html>
