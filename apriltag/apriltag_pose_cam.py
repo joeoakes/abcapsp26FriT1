@@ -6,7 +6,6 @@ import threading
 from pyapriltags import Detector
 from flask import Flask, Response, jsonify
 
-
 app = Flask(__name__)
 
 
@@ -69,6 +68,8 @@ class ThreadedCamera:
             if ok:
                 with self.lock:
                     self.frame = frame
+            else:
+                time.sleep(0.01)
 
     def read(self):
         with self.lock:
@@ -114,6 +115,7 @@ class AprilTagCameraServer:
         self.fps_display = 0.0
 
         self.latest_frame = None
+        self.latest_tag_data = None
         self.frame_lock = threading.Lock()
         self.running = True
 
@@ -131,11 +133,24 @@ class AprilTagCameraServer:
         )
 
         best = max(tags, key=lambda t: t.decision_margin) if tags else None
+        tag_data = None
 
         if best is not None:
             tag_id = best.tag_id
             tx, ty, tz = best.pose_t.flatten().tolist()
             roll, pitch, yaw = rotation_matrix_to_rpy_degrees(best.pose_R)
+
+            tag_data = {
+                "detected": True,
+                "tag_family": "tag36h11",
+                "tag_id": int(tag_id),
+                "x_m": round(tx, 3),
+                "y_m": round(ty, 3),
+                "z_m": round(tz, 3),
+                "roll_deg": round(roll, 1),
+                "pitch_deg": round(pitch, 1),
+                "yaw_deg": round(yaw, 1),
+            }
 
             msg1 = f"Type: tag36h11  ID: {tag_id}"
             msg2 = f"X: {tx:.3f} m  Y: {ty:.3f} m  Z: {tz:.3f} m"
@@ -163,6 +178,9 @@ class AprilTagCameraServer:
             center = tuple(best.center.astype(int))
             cv2.circle(frame, center, 5, (0, 255, 0), -1)
         else:
+            tag_data = {
+                "detected": False
+            }
             cv2.putText(
                 frame, "No AprilTag detected", (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2
@@ -179,7 +197,8 @@ class AprilTagCameraServer:
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
         )
 
-        return frame
+        tag_data["fps"] = round(self.fps_display, 1)
+        return frame, tag_data
 
     def _process_loop(self):
         while self.running:
@@ -188,17 +207,11 @@ class AprilTagCameraServer:
                 time.sleep(0.01)
                 continue
 
-            annotated = self._annotate_frame(frame)
+            annotated, tag_data = self._annotate_frame(frame)
 
             with self.frame_lock:
                 self.latest_frame = annotated.copy()
-
-            cv2.imshow("AprilTag Pose (Dashboard + Local Preview)", annotated)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q") or key == 27:
-                self.running = False
-                break
+                self.latest_tag_data = tag_data
 
     def mjpeg_generator(self):
         while self.running:
@@ -227,11 +240,16 @@ class AprilTagCameraServer:
 
             time.sleep(0.03)
 
+    def get_latest_tag_data(self):
+        with self.frame_lock:
+            if self.latest_tag_data is None:
+                return {"detected": False, "status": "warming_up"}
+            return dict(self.latest_tag_data)
+
     def shutdown(self):
         self.running = False
         self.worker.join(timeout=1.0)
         self.camera.release()
-        cv2.destroyAllWindows()
 
 
 camera_server = None
@@ -250,6 +268,11 @@ def health():
     return jsonify({"status": "ok", "stream": "ready"})
 
 
+@app.route("/tag")
+def tag():
+    return jsonify(camera_server.get_latest_tag_data())
+
+
 @app.route("/")
 def index():
     return """
@@ -258,6 +281,7 @@ def index():
     <body style="background:#111;color:white;font-family:sans-serif;">
         <h2>AprilTag Camera Stream</h2>
         <img src="/video_feed" width="640" />
+        <p><a href="/tag" style="color:#66ccff;">View latest tag JSON</a></p>
     </body>
     </html>
     """
@@ -278,10 +302,10 @@ def main():
         fps=target_fps
     )
 
-    print("Local preview running.")
-    print("Dashboard stream available at: https://127.0.0.1:5000/video_feed")
-    print("Health check available at: https://127.0.0.1:5000/health")
-    print("Press q or ESC in the OpenCV window to quit.")
+    print("AprilTag dashboard stream available at: http://10.170.9.8:5000/video_feed")
+    print("Main page: http://10.170.9.8:5000")
+    print("Tag JSON: http://10.170.9.8:5000/tag")
+    print("Health check: http://10.170.9.8:5000/health")
 
     try:
         app.run(
@@ -289,8 +313,7 @@ def main():
             port=5000,
             threaded=True,
             debug=False,
-            use_reloader=False,
-            ssl_context=("../https/certs/server.crt", "../https/certs/server.key")
+            use_reloader=False
         )
     finally:
         if camera_server is not None:
