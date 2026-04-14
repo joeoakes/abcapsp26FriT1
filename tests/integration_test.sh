@@ -121,8 +121,19 @@ verify_dashboard() {
 
 cleanup() {
     echo "Cleaning up servers..."
-    kill $MONGO_PID $REDIS_PID 2>/dev/null || true
+
+    if [ -n "${MONGO_PID:-}" ]; then
+        kill -TERM -$MONGO_PID 2>/dev/null || true
+    fi
+
+    if [ -n "${REDIS_PID:-}" ]; then
+        kill -TERM -$REDIS_PID 2>/dev/null || true
+    fi
+
     sleep 1
+
+    pkill -f maze_https 2>/dev/null || true
+
     log "Servers stopped"
 }
 
