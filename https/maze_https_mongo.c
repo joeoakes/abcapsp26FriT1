@@ -1,6 +1,5 @@
 // Compile with:
-// gcc -O2 -Wall -Wextra -std=c11 maze_https_mongo.c -o maze_https_mongo \
-//     $(pkg-config --cflags --libs libmicrohttpd libmongoc-1.0 gnutls)
+// gcc -O2 -Wall -Wextra -std=c11 maze_https_mongo.c -o maze_https_mongo $(pkg-config --cflags --libs libmicrohttpd libmongoc-1.0 gnutls)
 
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
@@ -12,7 +11,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DEFAULT_PORT 8447
+#define DEFAULT_MONGO_HTTPS_PORT 8447
 
 static const char *cert_file = "certs/server.crt";
 static const char *key_file  = "certs/server.key";
@@ -82,15 +81,19 @@ static char *get_moves_json(void)
     mongoc_collection_t *col = mongoc_client_get_collection(mongo_client,
                                                            config.mongo_db,
                                                            config.mongo_col);
-    if (!col) return strdup("[]");
+    if (!col) {
+        fprintf(stderr, "Failed to get collection\n");
+        return strdup("[]");
+    }
 
     bson_t *filter = bson_new();
     bson_t *opts   = bson_new();
 
     BSON_APPEND_INT32(opts, "limit", 200);
 
+    // Sort by received_at descending (newest first)
     bson_t *sort_doc = bson_new();
-    BSON_APPEND_INT32(sort_doc, "received_at", -1);   // newest first
+    BSON_APPEND_INT32(sort_doc, "received_at", -1);
     BSON_APPEND_DOCUMENT(opts, "sort", sort_doc);
     bson_destroy(sort_doc);
 
@@ -99,7 +102,7 @@ static char *get_moves_json(void)
     bson_destroy(filter);
     bson_destroy(opts);
 
-    size_t cap = 16384;                    // generous starting size
+    size_t cap = 16384;
     char *buf = malloc(cap);
     if (!buf) {
         mongoc_cursor_destroy(cursor);
@@ -335,6 +338,12 @@ int main(void)
     if (!config.mongo_col || !*config.mongo_col)
         config.mongo_col = "moves";
 
+    int port = DEFAULT_MONGO_HTTPS_PORT;
+    const char *env_port = getenv("MONGO_PORT");
+    if (env_port && *env_port) {
+        port = atoi(env_port);
+    }
+
     mongoc_init();
     mongo_client = mongoc_client_new(config.mongo_uri);
     if (!mongo_client) {
@@ -352,7 +361,7 @@ int main(void)
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
-        DEFAULT_PORT,
+        port,
         NULL, NULL,
         &http_handler, NULL,
         MHD_OPTION_HTTPS_MEM_CERT, cert_pem,
@@ -360,19 +369,28 @@ int main(void)
         MHD_OPTION_END);
 
     if (!daemon) {
-        fprintf(stderr, "Failed to start HTTPS server on port %d\n", DEFAULT_PORT);
+        fprintf(stderr, "Failed to start HTTPS server on port %d\n", port);
         free(cert_pem);
         free(key_pem);
         mongoc_cleanup();
         return 1;
     }
 
-    printf("MongoDB Telemetry Server running on https://0.0.0.0:%d\n", DEFAULT_PORT);
-    printf("   → POST moves   : https://...:%d/move\n", DEFAULT_PORT);
-    printf("   → GET telemetry: https://...:%d/api/moves\n", DEFAULT_PORT);
+    printf("MongoDB Telemetry Server running on https://0.0.0.0:%d\n", port);
+    printf("   → POST moves   : https://...:%d/move\n", port);
+    printf("   → GET telemetry: https://...:%d/api/moves\n", port);
     printf("\nPress Enter to stop...\n");
 
-    getchar();
+    // Allow non-interactive mode for integration tests
+    if (getenv("NON_INTERACTIVE") == NULL) {
+        getchar();
+    } else {
+        printf("Running in non-interactive mode (for tests)\n");
+        // Keep running until killed
+        while (1) {
+            sleep(1);
+        }
+    }
 
     MHD_stop_daemon(daemon);
     free(cert_pem);

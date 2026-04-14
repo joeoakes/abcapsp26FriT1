@@ -1,66 +1,122 @@
 # Maze HTTPS Redis Server - Tests
 
-This directory contains unit tests for the Maze Mission Dashboard server using the [Unity](https://github.com/ThrowTheSwitch/Unity) test framework.
+This directory contains unit tests and integration tests for the **Maze Mission Dashboard** server (`maze_https_redis.c`) using the [Unity](https://github.com/ThrowTheSwitch/Unity) test framework.
+
+## Current Architecture
+
+- **`maze_https_redis.c`** (port 8447): Serves the dashboard, stores missions in Redis, and proxies telemetry moves from the Mongo server.
+- **`maze_https_mongo.c`** (port 8446 for local testing): Accepts telemetry data via `/move` and serves it via `/api/moves`.
+
+For **local testing**, the Mongo HTTPS server runs on port **8446** while Redis runs on **8447**.  
+In production/multi-device setups, both can run on port **8447**.
 
 ## Test Files
 
-- `test_maze_https_redis.c` — Main test suite
-
-## Key Features of the Test Suite
-
-- Tests the exact JSON format produced by `save_mission_via_curl()` in the GameHat console
-- Validates mission storage in Redis (success, aborted, zero moves, etc.)
-- Uses **Redis Database 15** to ensure complete isolation from production data (DB 0)
-- Automatically cleans up test data before each test and after all tests finish
-- Includes tests for edge cases like empty `mission_id`
+- `test_maze_https_redis.c` — Unit tests for Redis logic and mission handling
+- `integration_test.sh` — Full end-to-end integration test (starts both servers, sends data, verifies)
 
 ## Prerequisites
 
-Make sure Redis is running locally:
+- Redis server running locally:
+    ```bash
+    redis-server --daemonize yes
+    ```
+- Valid client certificates in `../https/certs/` (`client.crt`, `client.key`)
+- MongoDB database accessible (default: `mongodb://localhost:27017`)
 
-```bash
-redis-server --daemonize yes
-```
+## How to Run Tests
 
-## How to Run the Tests
-
-From the project root (`~/abcapsp26FriT1`):
+### 1. Unit Tests
 
 ```bash
 cd tests
 make test
 ```
 
-The first time you run the tests, the Makefile will automatically download the Unity framework files (`unity.c`, `unity.h`, `unity_internals.h`).
+These tests validate:
 
-## Project Structure (Tests)
+- Mission writing to Redis
+- JSON generation (`get_missions_json`)
+- `fetch_moves_from_mongo()` behavior
+- Edge cases (empty mission_id, zero moves, etc.)
 
-```
-tests/
-├── test_maze_https_redis.c
-├── Makefile
-└── README.md
-```
+### 2. Integration Tests (Recommended)
 
-**Note**: The test file includes the server code using:
-
-```c
-#include "../https/maze_https_redis.c"
+```bash
+cd tests
+./integration_test.sh
 ```
 
-## Important Notes
+Or using Make:
 
-- All tests run on **Redis DB 15** — they will **never** affect your production data.
-- Tests are strict and expect the exact JSON output from `save_mission_via_curl()` (numbers as unquoted values).
+```bash
+cd tests
+make integration
+```
+
+**With custom MongoDB URI** (e.g. remote MongoDB):
+
+```bash
+cd tests
+MONGO_URI="mongodb://<host-ip>:27017" ./integration_test.sh
+```
+
+The integration test will:
+
+- Start Mongo telemetry server on port 8446
+- Start Redis dashboard server on port 8447
+- Send sample telemetry moves
+- Verify data flows through Mongo → Redis proxy → Dashboard
+- Test dashboard HTML loading
+- Clean up both servers when finished
+
+## Environment Variables
+
+| Variable         | Description                                    | Default                          |
+| ---------------- | ---------------------------------------------- | -------------------------------- |
+| `MONGO_URI`      | MongoDB database connection string             | `mongodb://localhost:27017`      |
+| `MONGO_MOVE_API` | (Internal) Used by Redis to reach Mongo server | Set automatically by test script |
+
+> Note: The Mongo HTTPS server is always accessed via `localhost` during local testing.
 
 ## Available Make Targets
 
 ```bash
-make test          # Build and run all tests
-make clean         # Remove test binary
+make test          # Run unit tests
+make integration   # Run full integration test
+make maze_https_redis  # Build the Redis server
+make clean         # Remove build artifacts
+make distclean     # Remove everything including Unity files
 ```
 
-## Troubleshooting
+## Manual Testing Commands (for reference)
 
-- If Redis is not running → tests will fail with a clear message.
-- If you see compilation issues with Unity → run `make` again (it will re-download the files).
+**Send a test move:**
+
+```bash
+curl -k -X POST "https://localhost:8446/move" \
+  --cert ../https/certs/client.crt \
+  --key ../https/certs/client.key \
+  -H "Content-Type: application/json" \
+  -d '{"event_type":"player_move","input":{"device":"keyboard","move_sequence":42},"player":{"position":{"x":10,"y":15}},"goal_reached":false,"timestamp":"2026-04-13T12:00:00Z"}'
+```
+
+**Check moves via Redis proxy:**
+
+```bash
+curl -k --cert ../https/certs/client.crt --key ../https/certs/client.key \
+  "https://localhost:8447/api/moves"
+```
+
+**Open Dashboard:**
+
+```
+https://localhost:8447/dashboard
+```
+
+## Important Notes
+
+- Unit tests run against **Redis DB 15** (isolated from production DB 7).
+- Integration test automatically starts and stops both servers.
+- The Mongo HTTPS server is always reached via `localhost` for local testing.
+- Use `MONGO_URI` when your MongoDB database is not on the default local instance.

@@ -12,8 +12,8 @@
 #include <gnutls/x509.h>
 #include <pthread.h>
 
-#define DEFAULT_PORT        8447
-#define DEFAULT_REDIS_PORT  6379
+#define DEFAULT_REDIS_HTTPS_PORT    8447
+#define DEFAULT_REDIS_PORT          6379
 
 static const char *cert_file = "certs/server.crt";
 static const char *key_file  = "certs/server.key";
@@ -236,7 +236,7 @@ static char *fetch_moves_from_mongo(void)
 {
     const char *mongo_api = getenv("MONGO_MOVE_API");
     if (!mongo_api || !*mongo_api) {
-        mongo_api = "https://localhost:8447/api/moves";
+        mongo_api = "https://10.170.8.130:8447/api/moves";
     }
 
     char cmd[1024];
@@ -530,7 +530,7 @@ int main(void)
     // Start HTTPS server with mTLS
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
-        DEFAULT_PORT,
+        DEFAULT_REDIS_HTTPS_PORT,
         NULL, NULL,
         &http_handler, NULL,
         MHD_OPTION_HTTPS_MEM_CERT, cached_cert,
@@ -540,19 +540,27 @@ int main(void)
         MHD_OPTION_END);
 
     if (!daemon) {
-        fprintf(stderr, "Failed to start MHD daemon (TLS). Check cert/key and that port %d is free.\n", DEFAULT_PORT);
+        fprintf(stderr, "Failed to start MHD daemon (TLS). Check cert/key and that port %d is free.\n", DEFAULT_REDIS_HTTPS_PORT);
         free(cached_cert); free(cached_key); free(cached_ca);
         redisFree(redis_ctx);
         return 1;
     }
 
     printf("\n=== Redis HTTPS Server with mTLS (Thread-Safe) ===\n");
-    printf("Server running on https://0.0.0.0:%d\n", DEFAULT_PORT);
-    printf("   → Dashboard: https://127.0.0.1:%d/dashboard\n", DEFAULT_PORT);
-    printf("   → API: https://127.0.0.1:%d/api/missions\n", DEFAULT_PORT);
+    printf("Server running on https://0.0.0.0:%d\n", DEFAULT_REDIS_HTTPS_PORT);
+    printf("   → Dashboard: https://127.0.0.1:%d/dashboard\n", DEFAULT_REDIS_HTTPS_PORT);
+    printf("   → API: https://127.0.0.1:%d/api/missions\n", DEFAULT_REDIS_HTTPS_PORT);
     printf("\nPress Enter to stop...\n");
 
-    getchar();
+    // Allow non-interactive mode for integration tests
+    if (getenv("NON_INTERACTIVE") == NULL) {
+        getchar();
+    } else {
+        printf("Running in non-interactive mode (for tests)\n");
+        while (1) {
+            sleep(1);
+        }
+    }
 
     MHD_stop_daemon(daemon);
     free(cached_cert);
