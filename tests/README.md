@@ -13,6 +13,7 @@ In production/multi-device setups, both can run on port **8447**.
 ## Test Files
 
 - `test_maze_https_redis.c` — Unit tests for Redis logic and mission handling
+- `test_maze_https_mongo.c` — MongoDB-backed tests for BSON parsing, timestamp generation, and Mongo document insertion/verification
 - `integration_test.sh` — Full end-to-end integration test (starts both servers, sends data, verifies)
 
 ## Prerequisites
@@ -23,6 +24,11 @@ In production/multi-device setups, both can run on port **8447**.
     ```
 - Valid client certificates in `../https/certs/` (`client.crt`, `client.key`)
 - MongoDB database accessible (default: `mongodb://localhost:27017`)
+- For MongoDB tests in **WSL**, if MongoDB is running on Windows instead of WSL, use the WSL virtual adapter IP for `MONGO_URI`  
+  Example:
+    ```bash
+    export MONGO_URI="mongodb://192.168.80.1:27017"
+    ```
 
 ## How to Run Tests
 
