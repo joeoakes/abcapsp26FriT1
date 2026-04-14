@@ -75,3 +75,4 @@ bin/
 build/
 *.bak
 *.zip
+maze/maze_state.json

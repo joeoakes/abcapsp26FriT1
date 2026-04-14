@@ -34,7 +34,6 @@ export MISSION_ENDPOINT="https://10.170.8.130:8447/mission"
 #define PAD    16
 #define MOVE_COOLDOWN_MS 325
 
-
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
 typedef struct {
@@ -63,6 +62,7 @@ static Pos current_path[MAZE_W * MAZE_H];
 static int path_len = 0;
 static bool network_enabled = true;
 static MissionState mission;
+static const char *MAZE_STATE_FILE = "maze_state.json";
 
 static inline bool in_bounds(int x, int y) {
     return (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H);
@@ -70,6 +70,39 @@ static inline bool in_bounds(int x, int y) {
 
 static int heuristic(int x, int y) {
     return abs(x - (MAZE_W - 1)) + abs(y - (MAZE_H - 1));
+}
+
+static void write_maze_state_json(int px, int py, bool won) {
+    FILE *f = fopen(MAZE_STATE_FILE, "w");
+    if (!f) {
+        perror("maze_state.json");
+        return;
+    }
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"maze_width\": %d,\n", MAZE_W);
+    fprintf(f, "  \"maze_height\": %d,\n", MAZE_H);
+    fprintf(f, "  \"cell_size\": %d,\n", CELL);
+    fprintf(f, "  \"padding\": %d,\n", PAD);
+    fprintf(f, "  \"player\": {\"x\": %d, \"y\": %d},\n", px, py);
+    fprintf(f, "  \"goal\": {\"x\": %d, \"y\": %d},\n", MAZE_W - 1, MAZE_H - 1);
+    fprintf(f, "  \"won\": %s,\n", won ? "true" : "false");
+    fprintf(f, "  \"cells\": [\n");
+
+    for (int y = 0; y < MAZE_H; y++) {
+        fprintf(f, "    [");
+        for (int x = 0; x < MAZE_W; x++) {
+            fprintf(f,
+                    "{\"walls\":%u}%s",
+                    g[y][x].walls,
+                    (x == MAZE_W - 1) ? "" : ",");
+        }
+        fprintf(f, "]%s\n", (y == MAZE_H - 1) ? "" : ",");
+    }
+
+    fprintf(f, "  ]\n");
+    fprintf(f, "}\n");
+    fclose(f);
 }
 
 static void knock_down(int x, int y, int nx, int ny) {
@@ -535,6 +568,7 @@ static void regenerate(int *px, int *py, SDL_Window *win) {
     mission.finished = false;
 
     compute_a_star_path(*px, *py, current_path, &path_len);
+    write_maze_state_json(*px, *py, false);
 
     SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (R regenerate, P = A* step, L = dashboard, Esc quit)");
 }
@@ -674,6 +708,7 @@ int main(void) {
                     }
 
                     compute_a_star_path(px, py, current_path, &path_len);
+                    write_maze_state_json(px, py, goal_reached);
                     next_move_tick = now + MOVE_COOLDOWN_MS;
                 }
                 continue;
@@ -692,7 +727,6 @@ int main(void) {
             }
 
             if (moved) {
-
                 move_sequence++;
                 mission.moves_total++;
                 mission.distance_traveled += 1.0f;
@@ -717,6 +751,7 @@ int main(void) {
                 }
 
                 compute_a_star_path(px, py, current_path, &path_len);
+                write_maze_state_json(px, py, goal_reached);
                 next_move_tick = now + MOVE_COOLDOWN_MS;
             }
         }
