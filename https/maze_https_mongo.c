@@ -270,10 +270,13 @@ static enum MHD_Result http_handler(void *cls,
             return ret;
         }
         
-        bool insert_ok = mongoc_collection_insert_one(col, doc, NULL, NULL, &error);
+        bool ok = mongoc_collection_insert_one(col, doc, NULL, NULL, &error);
+        if (!ok) {
+            fprintf(stderr, "Mongo insert failed: %s\n", error.message);
+        }
         mongoc_collection_destroy(col);
         
-        if (!insert_ok) {
+        if (!ok) {
             fprintf(stderr, "Mongo insert failed: %s\n", error.message);
             const char *reply = "{\"error\":\"mongo insert failed\"}";
             struct MHD_Response *response = MHD_create_response_from_buffer(
