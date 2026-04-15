@@ -150,5 +150,4 @@ verify_dashboard
 cleanup
 
 echo -e "\n${GREEN}=== ALL INTEGRATION TESTS PASSED ===${NC}"
-echo "Dashboard available at: https://localhost:8447/dashboard"
 echo "MongoDB URI used: ${MONGO_URI}"
