@@ -69,6 +69,7 @@ maze/missions/mission_dashboard
 https/maze_https_minipupper
 testmaze
 tests/test_maze_https_redis
+tests/test_maze_https_mongo
 
 # Build & temp
 bin/
