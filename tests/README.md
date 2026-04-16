@@ -98,8 +98,6 @@ These tests validate the **core maze game logic** implemented in `maze_sdl2.c`.
 ***Compile and Run***
 
 ```bash
-cd /mnt/c/Users/bosto/Desktop/abcapsp26FriT1/tests
-
 gcc -O2 -Wall -Wextra -std=c11 test_maze_sdl2.c unity.c -o test_maze_sdl2 \
   $(sdl2-config --cflags --libs) \
   $(pkg-config --cflags --libs libcurl)
