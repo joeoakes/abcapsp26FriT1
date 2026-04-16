@@ -14,6 +14,7 @@ In production/multi-device setups, both can run on port **8447**.
 
 - `test_maze_https_redis.c` — Unit tests for Redis logic and mission handling
 - `test_maze_https_mongo.c` — MongoDB-backed tests for BSON parsing, timestamp generation, and Mongo document insertion/verification
+- `test_maze_sdl2.c` — Unit tests for core maze game logic (pathfinding, movement, grid handling)
 - `integration_test.sh` — Full end-to-end integration test (starts both servers, sends data, verifies)
 
 ## Prerequisites
@@ -75,6 +76,52 @@ The integration test will:
 - Verify data flows through Mongo → Redis proxy → Dashboard
 - Test dashboard HTML loading
 - Clean up both servers when finished
+
+### 3. SDL2 Maze Unit Tests
+
+These tests validate the **core maze game logic** implemented in `maze_sdl2.c`.
+
+---
+
+***What is Tested***
+
+- Grid bounds (`in_bounds`)
+- Manhattan heuristic (`heuristic`)
+- Maze initialization (`maze_init`)
+- Wall removal (`knock_down`)
+- Movement (`can_move_to`, `try_move`)
+- A* pathfinding (`compute_a_star_path`)
+- JSON export (`write_maze_state_json`)
+
+---
+
+***Compile and Run***
+
+```bash
+cd /mnt/c/Users/bosto/Desktop/abcapsp26FriT1/tests
+
+gcc -O2 -Wall -Wextra -std=c11 test_maze_sdl2.c unity.c -o test_maze_sdl2 \
+  $(sdl2-config --cflags --libs) \
+  $(pkg-config --cflags --libs libcurl)
+
+./test_maze_sdl2
+
+Expected Output:
+- 15 Tests 0 Failures 0 Ignored
+- OK
+
+[ERROR] File not found: maze_sdl2.c
+Fix:
+  ls ../maze/maze_sdl2.c
+  -> If not found, correct the include path in test_maze_sdl2.c
+
+[ERROR] libcurl not found
+Fix:
+  sudo apt install libcurl4-openssl-dev
+
+[ERROR] Wrong working directory
+Fix:
+  cd /mnt/c/Users/bosto/Desktop/abcapsp26FriT1/tests
 
 ## Environment Variables
 
