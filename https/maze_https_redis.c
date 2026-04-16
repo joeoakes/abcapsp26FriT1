@@ -1,6 +1,8 @@
 // Compile with:
 // gcc -O2 -Wall -Wextra -std=c11 maze_https_redis.c -o maze_https_redis $(pkg-config --cflags --libs libmicrohttpd hiredis libbson-1.0 gnutls) -lpthread
+
 #define _POSIX_C_SOURCE 200809L
+
 #include <microhttpd.h>
 #include <hiredis/hiredis.h>
 #include <bson/bson.h>
@@ -8,19 +10,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
 #include <pthread.h>
 
-#define DEFAULT_REDIS_HTTPS_PORT    8447
-#define DEFAULT_REDIS_PORT          6379
+#define DEFAULT_REDIS_HTTPS_PORT 8447
+#define DEFAULT_REDIS_PORT 6379
 
 static const char *cert_file = "certs/server.crt";
 static const char *key_file  = "certs/server.key";
-static const char *ca_file   = "certs/ca.crt";
 
 static redisContext *redis_ctx;
-static const char *dashboard_html = NULL;
+static char *dashboard_html = NULL;
 static pthread_mutex_t redis_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char *cached_cert = NULL;
 static char *cached_key = NULL;
@@ -34,9 +36,21 @@ static char *read_file(const char *path)
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
 
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
     long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    if (len < 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
 
     char *buf = malloc((size_t)len + 1);
     if (!buf) {
@@ -49,8 +63,19 @@ static char *read_file(const char *path)
         fclose(f);
         return NULL;
     }
+
     buf[len] = '\0';
     fclose(f);
+    return buf;
+}
+
+/* ----------------------------------------------------------------------------
+   Utility: Read JSON file or fallback
+   ---------------------------------------------------------------------------- */
+static char *read_json_file_or_fallback(const char *path, const char *fallback_json)
+{
+    char *buf = read_file(path);
+    if (!buf) return strdup(fallback_json);
     return buf;
 }
 
@@ -79,16 +104,16 @@ static void write_mission(const bson_t *doc)
     snprintf(key, sizeof(key), "mission:%s:summary", mission_id);
 
     pthread_mutex_lock(&redis_mutex);
-    
+
     redisReply *reply;
 
-    #define HSET_STR(field) do { \
-        const char *val = bson_get_utf8_or_null(doc, field); \
-        if (val) { \
-            reply = redisCommand(redis_ctx, "HSET %s %s %s", key, field, val); \
-            if (reply) freeReplyObject(reply); \
-        } \
-    } while (0)
+#define HSET_STR(field) do { \
+    const char *val = bson_get_utf8_or_null(doc, field); \
+    if (val) { \
+        reply = redisCommand(redis_ctx, "HSET %s %s %s", key, field, val); \
+        if (reply) freeReplyObject(reply); \
+    } \
+} while (0)
 
     HSET_STR("robot_id");
     HSET_STR("mission_type");
@@ -98,13 +123,18 @@ static void write_mission(const bson_t *doc)
     HSET_STR("abort_reason");
     HSET_STR("distance_traveled");
     HSET_STR("duration_seconds");
-    #undef HSET_STR
 
-    /* Integer fields */
-    const char *int_fields[] = {"moves_left_turn", "moves_right_turn",
-                                "moves_straight", "moves_reverse", "moves_total"};
+#undef HSET_STR
 
-    for (size_t i = 0; i < sizeof(int_fields)/sizeof(int_fields[0]); i++) {
+    const char *int_fields[] = {
+        "moves_left_turn",
+        "moves_right_turn",
+        "moves_straight",
+        "moves_reverse",
+        "moves_total"
+    };
+
+    for (size_t i = 0; i < sizeof(int_fields) / sizeof(int_fields[0]); i++) {
         const char *field = int_fields[i];
         bson_iter_t iter;
         if (bson_iter_init_find(&iter, doc, field) &&
@@ -114,7 +144,7 @@ static void write_mission(const bson_t *doc)
             if (reply) freeReplyObject(reply);
         }
     }
-    
+
     pthread_mutex_unlock(&redis_mutex);
 }
 
@@ -132,16 +162,24 @@ static void json_init(JsonBuffer *jb)
     jb->cap = 4096;
     jb->buf = malloc(jb->cap);
     jb->len = 0;
-    jb->buf[0] = '\0';
+    if (jb->buf) {
+        jb->buf[0] = '\0';
+    }
 }
 
 static void json_append(JsonBuffer *jb, const char *str)
 {
+    if (!jb->buf || !str) return;
+
     size_t add_len = strlen(str);
     if (jb->len + add_len + 1 > jb->cap) {
-        jb->cap = (jb->cap + add_len + 4096) * 2;
-        jb->buf = realloc(jb->buf, jb->cap);
+        size_t new_cap = (jb->cap + add_len + 4096) * 2;
+        char *tmp = realloc(jb->buf, new_cap);
+        if (!tmp) return;
+        jb->buf = tmp;
+        jb->cap = new_cap;
     }
+
     memcpy(jb->buf + jb->len, str, add_len);
     jb->len += add_len;
     jb->buf[jb->len] = '\0';
@@ -150,25 +188,34 @@ static void json_append(JsonBuffer *jb, const char *str)
 static char *json_escape(const char *input)
 {
     if (!input) return strdup("");
+
     size_t len = strlen(input);
     char *out = malloc(len * 2 + 1);
+    if (!out) return strdup("");
+
     char *p = out;
     for (const char *q = input; *q; ++q) {
-        if (*q == '"') { *p++ = '\\'; *p++ = '"'; }
-        else if (*q == '\\') { *p++ = '\\'; *p++ = '\\'; }
-        else *p++ = *q;
+        if (*q == '"') {
+            *p++ = '\\';
+            *p++ = '"';
+        } else if (*q == '\\') {
+            *p++ = '\\';
+            *p++ = '\\';
+        } else {
+            *p++ = *q;
+        }
     }
     *p = '\0';
     return out;
 }
 
 /* ----------------------------------------------------------------------------
-   GET /api/missions (Thread-safe with mutex)
+   GET /api/missions
    ---------------------------------------------------------------------------- */
 static char *get_missions_json(void)
 {
     pthread_mutex_lock(&redis_mutex);
-    
+
     redisReply *keys_reply = redisCommand(redis_ctx, "KEYS mission:*:summary");
     if (!keys_reply || keys_reply->type != REDIS_REPLY_ARRAY) {
         if (keys_reply) freeReplyObject(keys_reply);
@@ -178,11 +225,18 @@ static char *get_missions_json(void)
 
     JsonBuffer jb;
     json_init(&jb);
+    if (!jb.buf) {
+        freeReplyObject(keys_reply);
+        pthread_mutex_unlock(&redis_mutex);
+        return strdup("[]");
+    }
+
     json_append(&jb, "[");
 
     int first = 1;
     for (size_t i = 0; i < keys_reply->elements; ++i) {
         const char *key = keys_reply->element[i]->str;
+        if (!key) continue;
 
         char mission_id[256] = {0};
         sscanf(key, "mission:%255[^:]:summary", mission_id);
@@ -203,18 +257,21 @@ static char *get_missions_json(void)
         free(esc);
         json_append(&jb, "\"");
 
-        for (size_t j = 0; j < hreply->elements; j += 2) {
+        for (size_t j = 0; j + 1 < hreply->elements; j += 2) {
             const char *field = hreply->element[j]->str;
             const char *val   = hreply->element[j + 1]->str;
+            if (!field || !val) continue;
 
             json_append(&jb, ",\"");
             esc = json_escape(field);
             json_append(&jb, esc);
             free(esc);
+
             json_append(&jb, "\":\"");
             esc = json_escape(val);
             json_append(&jb, esc);
             free(esc);
+
             json_append(&jb, "\"");
         }
 
@@ -224,7 +281,7 @@ static char *get_missions_json(void)
 
     json_append(&jb, "]");
     freeReplyObject(keys_reply);
-    
+
     pthread_mutex_unlock(&redis_mutex);
     return jb.buf;
 }
@@ -261,10 +318,14 @@ static char *fetch_moves_from_mongo(void)
 
     while (fgets(line, sizeof(line), pipe)) {
         size_t len = strlen(line);
-        if (pos + len >= cap) {
+        if (pos + len + 1 >= cap) {
             cap *= 2;
             char *tmp = realloc(buf, cap);
-            if (!tmp) break;
+            if (!tmp) {
+                free(buf);
+                pclose(pipe);
+                return strdup("[]");
+            }
             buf = tmp;
         }
         memcpy(buf + pos, line, len);
@@ -274,7 +335,6 @@ static char *fetch_moves_from_mongo(void)
     buf[pos] = '\0';
     pclose(pipe);
 
-    // If empty or failed, return empty array
     if (pos == 0) {
         free(buf);
         return strdup("[]");
@@ -314,40 +374,38 @@ static int is_client_cert_valid(struct MHD_Connection *connection)
 {
     const union MHD_ConnectionInfo *ci =
         MHD_get_connection_info(connection, MHD_CONNECTION_INFO_GNUTLS_SESSION);
-    
+
     if (!ci) {
         fprintf(stderr, "No TLS session info\n");
         return 0;
     }
-    
+
     gnutls_session_t session = ci->tls_session;
     if (!session) {
         fprintf(stderr, "No TLS session\n");
         return 0;
     }
-    
-    // Check if we have a client certificate
+
     if (gnutls_certificate_type_get(session) != GNUTLS_CRT_X509) {
         fprintf(stderr, "Not an X.509 certificate\n");
         return 0;
     }
-    
-    // Get client certificate
+
     unsigned int cert_list_size = 0;
     const gnutls_datum_t *cert_list = gnutls_certificate_get_peers(session, &cert_list_size);
+    (void)cert_list;
     if (cert_list_size == 0) {
         fprintf(stderr, "No client certificate provided\n");
         return 0;
     }
-    
-    // Verify the certificate
+
     unsigned int status = 0;
     int ret = gnutls_certificate_verify_peers2(session, &status);
     if (ret < 0) {
         fprintf(stderr, "Certificate verification error: %s\n", gnutls_strerror(ret));
         return 0;
     }
-    
+
     if (status != 0) {
         gnutls_datum_t out;
         gnutls_certificate_verification_status_print(status, GNUTLS_CRT_X509, &out, 0);
@@ -355,7 +413,7 @@ static int is_client_cert_valid(struct MHD_Connection *connection)
         gnutls_free(out.data);
         return 0;
     }
-    
+
     return 1;
 }
 
@@ -372,9 +430,9 @@ http_handler(void *cls,
              size_t *upload_data_size,
              void **con_cls)
 {
-    (void)cls; (void)version;
+    (void)cls;
+    (void)version;
 
-    /* GET dashboard */
     if (strcmp(method, "GET") == 0) {
         if (strcmp(url, "/dashboard") == 0 || strcmp(url, "/") == 0) {
             struct MHD_Response *response = MHD_create_response_from_buffer(
@@ -408,25 +466,41 @@ http_handler(void *cls,
             return ret;
         }
 
+        if (strcmp(url, "/api/maze-state") == 0) {
+            char *json = read_json_file_or_fallback(
+                "maze/maze_state.json",
+                "{\"maze_width\":21,\"maze_height\":15,\"cell_size\":32,\"padding\":16,"
+                "\"player\":{\"x\":0,\"y\":0},\"goal\":{\"x\":20,\"y\":14},\"won\":false,\"cells\":[]}"
+            );
+
+            struct MHD_Response *response = MHD_create_response_from_buffer(
+                strlen(json), json, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            MHD_add_response_header(response, "Cache-Control", "no-cache");
+            enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+
         if (strcmp(url, "/favicon.ico") == 0) {
-            struct MHD_Response *response = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
+            struct MHD_Response *response = MHD_create_response_from_buffer(
+                0, "", MHD_RESPMEM_PERSISTENT);
             enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_NO_CONTENT, response);
             MHD_destroy_response(response);
             return ret;
         }
     }
 
-    /* POST /mission */
     if (strcmp(method, "POST") == 0) {
-        // Require client certificate for all requests
         if (!is_client_cert_valid(connection)) {
             const char *error = "{\"error\":\"Valid client certificate required\"}";
             struct MHD_Response *response = MHD_create_response_from_buffer(
-                strlen(error), (void*)error, MHD_RESPMEM_PERSISTENT);
+                strlen(error), (void *)error, MHD_RESPMEM_PERSISTENT);
             enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, response);
             MHD_destroy_response(response);
             return ret;
         }
+
         if (strcmp(url, "/mission") == 0) {
             if (!*con_cls) {
                 *con_cls = calloc(1, sizeof(ConnectionInfo));
@@ -437,8 +511,10 @@ http_handler(void *cls,
             ConnectionInfo *info = *con_cls;
 
             if (*upload_data_size > 0) {
-                info->data = realloc(info->data, info->size + *upload_data_size + 1);
-                if (!info->data) return MHD_NO;
+                char *tmp = realloc(info->data, info->size + *upload_data_size + 1);
+                if (!tmp) return MHD_NO;
+                info->data = tmp;
+
                 memcpy(info->data + info->size, upload_data, *upload_data_size);
                 info->size += *upload_data_size;
                 info->data[info->size] = '\0';
@@ -446,7 +522,6 @@ http_handler(void *cls,
                 return MHD_YES;
             }
 
-            /* Process JSON */
             bson_error_t err = {0};
             bson_t *doc = bson_new_from_json((const uint8_t *)info->data, -1, &err);
             if (doc) {
@@ -469,10 +544,9 @@ http_handler(void *cls,
         }
     }
 
-    /* 404 for everything else */
     const char *notfound = "{\"error\":\"not found\"}";
     struct MHD_Response *response = MHD_create_response_from_buffer(
-        strlen(notfound), (void*)notfound, MHD_RESPMEM_PERSISTENT);
+        strlen(notfound), (void *)notfound, MHD_RESPMEM_PERSISTENT);
     enum MHD_Result ret = MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, response);
     MHD_destroy_response(response);
     return ret;
@@ -483,7 +557,6 @@ http_handler(void *cls,
    ---------------------------------------------------------------------------- */
 int main(void)
 {
-    /* Redis connection with env var support */
     const char *redis_host = getenv("REDIS_HOST");
     if (!redis_host || !*redis_host) redis_host = "127.0.0.1";
 
@@ -510,24 +583,23 @@ int main(void)
     }
     freeReplyObject(reply);
     pthread_mutex_unlock(&redis_mutex);
-    
+
     printf("Connected to Redis at %s:%d (DB 7)\n", redis_host, redis_port);
 
-    // Read certificate files
     cached_cert = read_file(cert_file);
     cached_key = read_file(key_file);
-    cached_ca = read_file(ca_file);
-    
-    if (!cached_cert || !cached_key || !cached_ca) {
+
+    if (!cached_cert || !cached_key) {
         fprintf(stderr, "Failed to load certificate files\n");
-        free(cached_cert); free(cached_key); free(cached_ca);
+        free(cached_cert);
+        free(cached_key);
         redisFree(redis_ctx);
         return 1;
     }
 
-    dashboard_html = load_dashboard_html("../dashboard/dashboard.html");
+    dashboard_html = load_dashboard_html("dashboard/dashboard.html");
 
-    // Start HTTPS server with mTLS
+
     struct MHD_Daemon *daemon = MHD_start_daemon(
         MHD_USE_THREAD_PER_CONNECTION | MHD_USE_TLS,
         DEFAULT_REDIS_HTTPS_PORT,
@@ -535,13 +607,15 @@ int main(void)
         &http_handler, NULL,
         MHD_OPTION_HTTPS_MEM_CERT, cached_cert,
         MHD_OPTION_HTTPS_MEM_KEY, cached_key,
-        MHD_OPTION_HTTPS_MEM_TRUST, cached_ca,
         MHD_OPTION_HTTPS_PRIORITIES, "NORMAL:+VERS-TLS1.2:+CTYPE-X509:+SIGN-ALL:+COMP-NULL",
         MHD_OPTION_END);
 
     if (!daemon) {
-        fprintf(stderr, "Failed to start MHD daemon (TLS). Check cert/key and that port %d is free.\n", DEFAULT_REDIS_HTTPS_PORT);
-        free(cached_cert); free(cached_key); free(cached_ca);
+        fprintf(stderr, "Failed to start MHD daemon (TLS). Check cert/key and that port %d is free.\n",
+                DEFAULT_REDIS_HTTPS_PORT);
+        free(cached_cert);
+        free(cached_key);
+        free(dashboard_html);
         redisFree(redis_ctx);
         return 1;
     }
@@ -549,10 +623,11 @@ int main(void)
     printf("\n=== Redis HTTPS Server with mTLS (Thread-Safe) ===\n");
     printf("Server running on https://0.0.0.0:%d\n", DEFAULT_REDIS_HTTPS_PORT);
     printf("   → Dashboard: https://127.0.0.1:%d/dashboard\n", DEFAULT_REDIS_HTTPS_PORT);
-    printf("   → API: https://127.0.0.1:%d/api/missions\n", DEFAULT_REDIS_HTTPS_PORT);
+    printf("   → API missions: https://127.0.0.1:%d/api/missions\n", DEFAULT_REDIS_HTTPS_PORT);
+    printf("   → API moves: https://127.0.0.1:%d/api/moves\n", DEFAULT_REDIS_HTTPS_PORT);
+    printf("   → API maze: https://127.0.0.1:%d/api/maze-state\n", DEFAULT_REDIS_HTTPS_PORT);
     printf("\nPress Enter to stop...\n");
 
-    // Allow non-interactive mode for integration tests
     if (getenv("NON_INTERACTIVE") == NULL) {
         getchar();
     } else {
@@ -565,7 +640,7 @@ int main(void)
     MHD_stop_daemon(daemon);
     free(cached_cert);
     free(cached_key);
-    free(cached_ca);
+    free(dashboard_html);
     redisFree(redis_ctx);
     pthread_mutex_destroy(&redis_mutex);
     return 0;

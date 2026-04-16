@@ -1,25 +1,22 @@
-
-
 #!/usr/bin/env bash
-set -e  # Exit immediately on error
+set -e
 
 echo "=== Building Project Apps ==="
 echo
 
-# Create output folder
 mkdir -p bin
 
 ############################################
-# 1) Build maze_sdl2
+# 1) Build maze_sdl2 (UPDATED)
 ############################################
-echo "Compiling maze/testmaze_sdl2.c -> bin/testmaze_sdl2"
+echo "Compiling maze/maze_sdl2.c -> bin/maze_sdl2"
 
 gcc -O2 -Wall -Wextra -std=c11 \
-    maze/testmaze_sdl2.c \
-    -o bin/testmaze_sdl2 \
+    maze/maze_sdl2.c \
+    -o bin/maze_sdl2 \
     $(pkg-config --cflags --libs sdl2) -lcurl
 
-echo "maze_testsdl2 built successfully."
+echo "maze_sdl2 built successfully."
 echo
 
 ############################################
@@ -63,3 +60,4 @@ echo
 
 echo "=== All builds complete ==="
 ls -lh bin
+

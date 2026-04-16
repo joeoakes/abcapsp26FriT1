@@ -62,7 +62,7 @@ static Pos current_path[MAZE_W * MAZE_H];
 static int path_len = 0;
 static bool network_enabled = true;
 static MissionState mission;
-static const char *MAZE_STATE_FILE = "maze_state.json";
+static const char *MAZE_STATE_FILE = "maze/maze_state.json";
 
 static inline bool in_bounds(int x, int y) {
     return (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H);
